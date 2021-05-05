@@ -4,12 +4,12 @@
 
 **Eclipse** is an application to be run standalone and offline in a web browser. The data is approximate, the times are in Universal Time and rounded to 1 minute, and the magnitudes to 1 percent, so it is not as accurate as the >NASA site of Fred Espenak](https://eclipse.gsfc.nasa.gov/eclipse.html). It is based upon the _Tables of Moon and Sun (Kessel-Lo: Kesselberg Sterrenwacht, 1962)_ and _Astronomical Formulae for Calculators (1979), 1st ed, ISBN 0-943396-22-0_.
 
-Originally I have written it in [Fortran](https://en.wikipedia.org/wiki/Fortran) and then translated it into [C][https://en.wikipedia.org/wiki/C \(programming language\)) and adding graphic representation of eclipse phases and solar eclipse world maps. Years later when Javascript became common in browsers I translated it again in Javacript, first just the calculations with numeric output. Later on, I used the Javascript Canvas to implement the graphical representations for which I translated the C code to Javascript and making Canvas basic graphing routines. I found a Worldmap and d3.v3.js to add the worldmap for plotting solar eclipse areas. In the meantime I jQueryfied much code as well, as it is much easier then plain Javascript.
+Originally I have written it in [Fortran](https://en.wikipedia.org/wiki/Fortran) and then translated it into [C][https://en.wikipedia.org/wiki/C%20%29programming%20language%29) and adding graphic representation of eclipse phases and solar eclipse world maps. Years later when Javascript became common in browsers I translated it again in Javacript, first just the calculations with numeric output. Later on, I used the Javascript Canvas to implement the graphical representations for which I translated the C code to Javascript and making Canvas basic graphing routines. I found a Worldmap and d3.v3.js to add the worldmap for plotting solar eclipse areas. In the meantime I jQueryfied much code as well, as it is much easier then plain Javascript.
 
 
 ### Contents
 - eclipse.html (main app containing layout and calculations in Javascript
-- worldmap folder containing Javascript plotting code and json code with coastlines and country borders (got from the internet in 2013, source is probably gone)
+- worldmap folder containing Javascript plotting code and json code with coastlines and country borders (got from the internet in 2013, source is probably gone).
 - general.js containing basic (spherical) trigonometic and other functions
 - style.css (some extra css, however most i defined withing the main eclipse.html).
 
@@ -22,7 +22,7 @@ Clicking on the solar eclipse world map (with a crosshair icon) on a location wi
 ### Installation
 
 Download the Zip file and unzip it into the desired folder. If you have a web server, you should in install in a folder under the Document root folder of the Apache / Lighttpd. When using as a 'local' html (without a local web server) file you can just open 'eclipse.html' with a web browser.
-Note for iOS: In iOS there is no shared folder, so you should use an app which has a builtin file browser and web browser within its sandbox, e.g.[Readdie Documents] (https://apps.apple.com/app/id364901807) (free, iPhone and iPad), but there are more similar free or paid file manager apps. There you can unzip the aforementioned zip in the folder within Documents you wish.
+Note for iOS: In iOS there is no shared folder, so you should use an app which has a builtin file browser and web browser within its sandbox, e.g.[Readdie Documents] (https://apps.apple.com/app/id364901807) (free, iPhone and iPad), but there are more similar free or paid file manager apps. There you can unzip the aforementioned zip in the folder within Documents you wish. Then load 'eclipse.html' in the web browser every time you use this app.
 
 ### For Devs and Contributors
 _NOTE :_ This code is a result from years of development and translation, so it has gone rather spaghetti. Most parts use the rather standard indentation rule of four spaces per indentation, braces at end of line (except function definitions) and braces around a single conditional line of code. A few parts still contain old style two spaces per indent and single line conditional code not in braces.
