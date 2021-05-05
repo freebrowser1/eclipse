@@ -1,0 +1,2685 @@
+<!DOCTYPE html>
+<html manifest='eclipse.manifest'>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<meta name="description" content="">
+<meta name="keywords" content="">
+<link rel='stylesheet' type='text/css' href='style.css'/>
+<script type='text/javascript' src="jq/jquery.js"></script>
+<script type='text/javascript' src="debug.js"></script>
+<script type='text/javascript' src="general.js"></script>
+<script src='worldmap/d3.v3.js'></script>
+<script src='worldmap/topojson.v0.min.js'></script>
+<script src="worldmap/world-110m.js"></script>
+<script type='text/javascript'>
+/**
+Eclipse calculation script from Jean Meeus Formulas
+Between years 1000 and 3000 AD
+*/
+if (typeof(p_r) == "undefined") {
+    var g_d = false;
+    function p_r() {}  // debug.js not available: NO debugging
+}
+const g_version = "20210505";
+// 20200503 Added GPS support
+
+var debug = false;
+// all done
+var g_done = false;
+var ___elem = document.createElement('canvas');
+var g_canvas = ___elem.getContext('2d') ? true : false;
+
+// Curve and text colors solar eclipses
+const COLOR_HORIZONCURVES    = "#00AA00";
+const COLOR_HORIZONMAXCURVES = "red";
+const COLOR_PENUMBRALIMIT    = "red";
+const COLOR_TEXT1            = "red";
+const COLOR_TEXT2            = "red";
+const COLOR_MAXMAGNITUDES    = "white";
+// World map colors
+const COLOR_OCEAN     = '#88C0FF';
+const COLOR_LAND      = '#d7c7ad';
+const COLOR_COASTLINE = '#766951';
+
+const CHECKLOCAL    = 2
+const UNDEFINED     = "undefined"
+const FLATT         = 0.99665;
+const RHO_1         = 0.9972;
+const PENUMBRAL     = 1
+const PARTIAL_SOLAR = 2
+const ANNULAR_SOLAR = 3
+const TOTAL_SOLAR   = 4
+const DAYS_CENT     = 36525;
+// extraflags bits
+const P_HYBRID      = 1;
+const P_NONCENTRAL  = 2;
+const P_ANNULAR     = 4;  // otherwise total
+///
+const OUT_OF_RANGE  = 9999999;
+var edata;
+var g_eclipsedata;
+const RAD           = 180./Math.PI;
+
+// ploteclipse
+const D_MAGN=60;
+const CURVECOUNT = 5;  // should be a divisor of D_MAGN
+const D_MAGN2 =(D_MAGN*2+2);
+const MAXPOSITIONS =(D_MAGN2*6+45);
+const NOT_FILLED_IN = 9999;
+const MINYEAR = 1000;
+const MAXYEAR = 3000;
+const PLOT_LINE=1;
+const PLOT_CIRCLE=3;
+const PLOT_TEXT=4;
+
+const VISIBLEHERE = 2;  // return value if at least the umbral phase or middle of the eclipse is visible here
+
+//var g_d           = null;
+
+Math.sign = function(x)
+{
+  return x < 0 ? -1 : 1;
+} ;
+
+/*******************************************************************************
+*
+*     calculates a certain lunar phase
+*     Astronomical Formulae for Calculators (1979), 1st ed, ISBN 0-943396-22-0
+*
+******************************************************************************/
+
+function sumsin(e,coeff, angle)
+{
+    var h = 1.0; //force float
+    return h*e*coeff*dsin(angle);
+}
+
+function sumcos(e,coeff, angle)
+{
+    var h = 1.0; //force float
+    return h*e*coeff*dcos(angle);
+}
+
+function new_full_moon(e,T, M,M_,F) /* new and full moon */
+{
+    var sum = (1734.-3.93*T)*dsin(M);
+    sum += sumsin(1, 21,M+M);
+    sum += sumsin(1,-4068,M_);
+    sum += sumsin(1, 161,M_+M_);
+    sum += sumsin(1, -4,M_+M_+M_);
+    sum += sumsin(1, 104,F);
+    sum += sumsin(e, -51,M+M_);
+    sum += sumsin(e, -74,M-M_);
+    sum += sumsin(e, 4,F+M);
+    sum += sumsin(e, -4,F-M);
+    sum += sumsin(1, -6,F+M_);
+    sum += sumsin(1, 10,F-M_);
+    sum += sumsin(e, 5,M+M_*M_);
+    return (sum/10000.);
+}
+
+function first_last_quarter(e,T, fq, M,M_,F)
+{
+    var h;
+    var sum = (1721.-4.*T) * dsin(M);
+    sum += sumsin(1, 21,2*M);
+    sum += sumsin(1,-6280,M_);
+    sum += sumsin(1, 89,2*M_);
+    sum += sumsin(1, -4,3*M_);
+    sum += sumsin(1, 79,F);
+    sum += sumsin(e, -119,M+M_);
+    sum += sumsin(e, -47,M-M_);
+    sum += sumsin(e, 3,F+M);
+    sum += sumsin(e, -4,F-M);
+    sum += sumsin(1, -6,F+M_);
+    sum += sumsin(1, 21,F-M_);
+    sum += sumsin(e, 3,M+2*M_);
+    sum += sumsin(e, 4,M-2*M_);
+    sum += sumsin(e*e, -3,2*M+M_);
+    h=28. -4.0 * dcos(M) + 3.0 * dcos(M_);
+    if (!fq) h = -h;
+    return (sum+h)/10000.;
+}
+
+function angler(x0,x1,x2,x3,t)
+{
+    return range(x0+t* (x1 + t* (x2 + t*x3)));
+}
+
+ /*
+  * calculate each phase
+  * k % 4 == 0 NM 1 FQ 2 FM 3 LQ
+  */
+function phase(k)
+{
+    var fq;
+    var cor,h,kk,d;
+    var t;
+    var M,M_,F;
+
+    var t1 = (k/4.)/1236.853;
+    var i = (k+50000);
+    var j = (i % 4);
+    kk = (i-50000)/4;
+
+    jd = (0.75933+(29.53058868+77e-12*kk -81.9e-18*kk*kk)*kk);
+    cor = 0.00033 * dsin(range(166.56+132.87*t1,-0.0091731*t1*t1));
+    jd = jd + cor;
+    M = angler(359.2242, 29.10535608,-21.77e-12,-1834e-18,kk);
+    M_ = angler(306.0253,385.81691806, 7014e-12 , 6.53e-15,kk);
+    F = angler(21.2964,390.67050646,-1080e-12 ,-1263e-18,kk);
+    F += F; /* always calculate with 2*F !! */
+    e = 1.-t1*(0.0024954+(7522e-9)*t1);
+    if (j & 1)
+        jd += first_last_quarter(e,t1,k == 1, M,M_,F);
+    else
+        jd += new_full_moon(e,t1, M,M_,F);
+    return new Array(jd, M, M_, F/2);
+}
+
+/*  jdtodatetime  --  Convert  Julian  date  to  year,  month, day, hour, minute, second which are
+               returned as an Array.  */
+
+function jdtodatetime(td, offset)
+{
+    var z, f, a, alpha, b, c, d, e, mm;
+    var tdfrac, ij;
+
+    if (arguments.length == 1) {
+        offset = 0;
+    } else if (offset == 1900) {
+        offset = 2415020.5;
+    } else if (offset == 2000) {
+        offset = 2451545.5;
+    } else {
+        offset = 0;
+    }
+    td += offset;
+
+    tdfrac = td-Math.floor(td);
+    td = Math.floor(td) + 0.5;
+    z = Math.floor(td);
+    f = td - z;
+
+    if (z < 2299161.0) {
+        a = z;
+    } else {
+        alpha = Math.floor((z - 1867216.25) / 36524.25);
+        a = z + 1 + alpha - Math.floor(alpha / 4);
+    }
+
+    b = a + 1524;
+    c = Math.floor((b - 122.1) / 365.25);
+    d = Math.floor(365.25 * c);
+    e = Math.floor((b - d) / 30.6001);
+    mm = Math.floor((e < 14) ? (e - 1) : (e - 13));
+
+    ij = tdfrac * 86400.0;
+    // return y-m-d-h-m-s
+    return new Array(
+                     Math.floor((mm > 2) ? (c - 4716) : (c - 4715)),
+                     mm,
+                     Math.floor(b - d - Math.floor(30.6001 * e) + f),
+                     Math.floor(ij / 3600),
+                     Math.floor((ij / 60) % 60),
+                     Math.floor(ij % 60)
+                    );
+}
+
+// timeonly==1: time;  timeonly==-1: date only
+function edate(j, offset, timeonly)
+{
+    var Months = new Array("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    );
+    var date;
+
+    if (arguments.length == 1)
+        offset = 0;
+
+    j += (30.0 / (24 * 60 * 60)); // Round to nearest minute
+    var latlon = getlatlon();
+    if (latlon.utcdiff) {
+        j += latlon.utcdiff/24;  // UTC difference
+    }
+    date = jdtodatetime(j, offset);
+    if (typeof(timeonly) == UNDEFINED) timeonly = 0;
+    var ret = "";
+    if (timeonly == 1)
+        ret = pad(date[3], 2, " ") + ":" + pad(date[4], 2, "0");
+    else {
+        ret = date[0] + " " + Months[date[1] - 1] + " " + pad(date[2], 2, " ");
+        if (timeonly == 0) ret += (" " + pad(date[3], 2, " ") + ":" + pad(date[4], 2, "0"));
+    }
+    return ret;
+}
+
+function eclipse_number(month, year)
+{
+    var z,i;
+    var error = "";
+
+//    year = year.parseInt();
+    if (year < 50) {
+        year += 2000;
+    } else if (year < 100) {
+        year += 1900;
+    }
+    if (month < 1 || month > 12) {
+        error += "months only from 1 to 12\n";
+    }
+    if (year < 0 || year > 4000) {
+        error += "years only within 2nd or 3rd millennium\n";
+    }
+    if (error != "") {
+        alert(error);
+        return OUT_OF_RANGE;
+    }
+    z = 2.10745*((year-1900) + month/12.) + 0.6;
+    i = Math.floor((z + 10000.) - 10000);
+    if (Math.abs(i) > 4200) return (OUT_OF_RANGE);
+    return i;
+}
+
+function Eclipsedata(number,jd, M,M_,F,e,gamma,l1)
+{
+    this.number   = number
+    this.jd       = jd
+    this.M        = M
+    this.M_       = M_
+    this.F        = F
+    this.e        = e
+    this.gamma    = gamma
+    this.l1       = l1
+    this.tle = new Array();    // times in human readable format (both)
+    this.tse = new Array();    // extra eclipse data (solar only)
+    this.xle = new Array();    // coordinates of center of moon relative to center of Sun or Earth shadow in degrees
+    this.yle = new Array();
+    this.lunar = false;
+    this.debug = false;
+    this.pos_angle = new Array();
+    this.alt_sun  = new Array();
+    this.visible_here = false;
+}
+
+function eclipse_maindata(ecl_number, first, lunar)
+{
+    var a,k,h,hh,dt,s,c;
+    var ish, n;
+
+    var two_eclipses = false;
+
+/* ----------------------------------------------calculate lunation number */
+    a = 5.86883*ecl_number-0.69+50000.;
+/* ------------------------------------------------------time out of range */
+    if (Math.abs(a-50000.) > 20000.) return(OUT_OF_RANGE);
+    if (lunar) a=a+0.5;
+    k = Math.floor(a + 0.5);
+    h = k-a;
+    ish = h < 0 ? -1 : 1;
+    hh = Math.abs(h) - 0.34;
+/* ---------------------two eclipses possible with one lunation interval ? */
+/*
+    if (hh > 0)
+    {
+      if (!first) k = k-ish;
+      two_eclipses = true;
+    }
+    */
+
+    if (!first) k = k-ish;
+
+    if (lunar) k = k-0.5;
+    //alert(a + " " + k);
+    k -= 50000;
+
+    var T = k/1236.853;
+
+    var e = 1.-T*(0.0024954+(7522e-9)*T);
+
+    var a = phase(Math.round(k*4));
+
+    var jd = a[0];
+    //alert(jd); return true;
+
+    var m  = a[1];
+    var m1 = a[2];
+    var f  = a[3];
+
+    s = 51959.5;
+    c = 0.;
+    omega = angler(259.18e0,-1934.182008e0,2078.e-6,22.e-7,T);
+
+    s += sumcos(e, -48.,m);
+    s += sumcos(e*e,   20.,2*m);
+    s += sumcos(1,-3283.,m1);
+    s += sumcos(e,  -60.,m+m1);
+    s += sumcos(e,   41.,m-m1);
+    c += sumsin(e, 2065.,m);
+    c += sumsin(e    *e,   24.,2*m);
+    c += sumsin(1, -390.,m1);
+    c += sumsin(1,  115.,2*m1);
+    c += sumsin(e,  -73.,m+m1);
+    c += sumsin(e,  -67.,m-m1);
+    c += sumsin(1,  117.,2*f);
+    gamma = s*dsin(f)+c*dcos(f)-(dcos(f) < 0 ? -1 : 1)*25.*dsin(omega);
+    gamma = gamma/1e4;
+    l2 = -59.;
+    l2 += sumcos(e,-46.,m);
+    l2 += sumcos(1,182.,m1);
+    l2 += sumcos(1, -4.,2*m1);
+    l2 += sumcos(e,  5.,m+m1);
+    l2 = l2/1e4;
+    l1 = 0.5460-l2;
+    speed = 13.1+0.96*dcos(m1);
+    dt = ((dcos(f) < 0 ? -1 : 1)*980.5*gamma)/(1e4*speed);
+    jd = jd - dt;
+    T = jd / 36525;
+    // check if an eclipse is available (shadow touches eclipsed object)
+    if (Math.abs(gamma)-l1 < RHO_1) {
+        ecldata = new Eclipsedata(ecl_number,jd,m,m1,f,e,gamma,l1);
+        eclnumber = ecl_number;
+        ecldata.lunar = lunar;
+        ecldata.speed = speed;
+        ecldata.maximum_local_magn = false;
+        return ecldata;
+    }
+    return false;
+}
+function eclipse_auxdata(edata) // auxiliary eclipse data
+{
+    for (var i = 0; i < 7; i++) edata.tle[i] = "";
+    var l2 = 0.546 - edata.l1; // umbral limit
+    edata.l2 = l2; // penumbral limit
+    var d_mu = Math.PI * 2;
+    edata.extra = "";
+    var l = range(279.691 + (.9856473354 + 227e-15 * edata.jd) * edata.jd);
+    var m2 = l + 78.8 - (edata.jd * 47e-6);
+    var corr = (0.04 * dcos(m2) * e + 1.92) * e * dsin(m2);
+    var ll = l + corr;
+    var epsilon = 23.4523 - (edata.jd / 28e5);
+    var delta = dasin(dsin(ll) * dsin(epsilon));
+    edata.delta = delta;
+
+    var d1 = dasin(dsin(delta) / RHO_1);
+
+    var alfa = datan2(dsin(ll) * dcos(epsilon), dcos(ll));
+    edata.alfa = alfa;
+    var h = dasin(dsin(epsilon) * dcos(alfa));
+    var h2 = 5.6 * sign(dcos(edata.F));
+    if (edata.lunar) h = -h;
+    var psi = -h - h2;
+    // no negative numbers
+    var jd = edata.jd + 100000000;
+    var frac = jd - Math.floor(jd);
+    var mu = alfa - l - (360. * frac);
+    var u = range(mu + 180);
+    edata.mu = u - 180;
+    edata.psi = psi;
+
+    // ----------------------------------------------------------lunar eclipse
+    if (edata.lunar) {
+        edata.magn = (1.0129 + l2 - Math.abs(gamma)) / 0.545;
+        // ---------------------------------------check if it is an umbral eclipse
+
+        if (edata.magn < 0.) {
+            edata.flags = PENUMBRAL;
+            edata.magn = (1.5572 - l2 - Math.abs(gamma)) / 0.545;
+        }
+
+        var pp = 1.5572 - l2;
+        lunar_contact_times(edata, edata.gamma, 3, 3, "middle of the eclipse");
+        // penumbral lunar eclipse
+        if (edata.flags == PENUMBRAL) {
+            edata.title = "Penumbral";
+            lunar_contact_times(edata, pp, 2, 4, "penumbral");
+        } else {
+            up = 1.0129 + l2;
+            // total lunar eclipse
+            if (edata.magn > 1) {
+                tp = 0.4679 + l2;
+                edata.title = "Total";
+                lunar_contact_times(edata, tp, 2, 4, "totality");
+                lunar_contact_times(edata, up, 1, 5, "umbral");
+                lunar_contact_times(edata, pp, 0, 6, "penumbral");
+            }
+            // partial lunar eclipse
+            else {
+                edata.title = "Partial";
+                lunar_contact_times(edata, up, 2, 4, "umbral");
+                lunar_contact_times(edata, pp, 1, 5, "penumbral");
+            }
+        }
+        edata.extra = "<div class=\"solarresult\">Max magn = " + round(edata.magn, 2) + "</div>";
+        for (i = 0; i < 7; i++) {
+            if (edata.tle[i] != "") {
+                edata.extra += "<br/>" + edata.tle[i];
+            }
+        }
+    } else {
+        // ----------------------------------------------------------solar eclipse
+
+        edata.magn = (1.5432 - l2 - Math.abs(edata.gamma)) / (0.546 - 2 * l2);
+        edata.tan_f2 = 0.004664 + 0.000078 * dcos(edata.M);
+        var gam1 = edata.gamma / RHO_1;
+        edata.flags = PARTIAL_SOLAR;
+        edata.extraflags = 0;
+        // axis of lunar shadow touches Earth: central eclipse
+        if (Math.abs(gam1) < 1.) {
+            if (l2 <= 0) {
+                var w = Math.sqrt(1. - gam1 * gam1) * edata.tan_f2;
+                edata.flags = ANNULAR_SOLAR;
+                if ((l2 + w) > 0) {
+                    edata.flags = TOTAL_SOLAR;
+                    edata.extraflags |= P_HYBRID;
+                }
+            } else
+                edata.flags = TOTAL_SOLAR;
+            // part of umbra touching the Earth but not the axis
+        } else if ((Math.abs(edata.gamma) - Math.abs(l2)) < RHO_1) {
+            if (l2 <= 0)
+                edata.extraflags |= P_ANNULAR;
+            edata.extraflags |= P_NONCENTRAL;
+        }
+        p_r([edata.gamma, l2, (Math.abs(edata.gamma) - Math.abs(l2)), RHO_1, (Math.abs(edata.gamma) - Math.abs(l2)) < RHO_1, edata.flags, edata.extraflags, edata.visible_here]);
+        if (edata.extraflags & P_HYBRID)
+            edata.title = "Hybrid";
+        else if (edata.flags == ANNULAR_SOLAR)
+            edata.title = "Annular";
+        else if (edata.flags == TOTAL_SOLAR)
+            edata.title = "Total";
+        else if (edata.extraflags & P_NONCENTRAL) {
+            if (edata.extraflags & P_ANNULAR)
+                edata.title = "Annular noncental";
+            else
+                edata.title = "Total noncental";
+        } else
+            edata.title = "Partial";
+
+        edata.extra = "<div class=\"solarresult\">";
+        if (edata.flags == PARTIAL_SOLAR)
+            edata.extra += "Max magn=" + round(edata.magn, 2);
+    }
+    var diff = deltat(edata.jd);
+    edata.T = edata.jd / 36525;
+
+    // correct for UT-ET
+    edata.jd -= diff;
+    var sd = dsin(d1);
+    var cd = dcos(d1);
+    edata.d1 = d1;
+    edata.sd = sd;
+    edata.cd = cd;
+    // location of greatest partial eclipse
+    if (!edata.lunar) {
+        var phi, lambda;
+        edata.worldmapdata = false; // reset worldmap data
+        edata.d_mu = d_mu;
+        if (edata.flags == PARTIAL_SOLAR) {
+            phi = dasin(dcos(d1) * dcos(psi));
+            if (edata.gamma < 0) phi = -phi;
+            var ha = dacos(-dtan(phi) * dtan(d1));
+            s = sign(gamma) * sign(psi);
+            lambda = range(edata.mu + s * ha + diff * 360);
+            /* greatest phase at partial eclipses */
+            var xy = calc_greatest_phase(edata);
+            if (g_canvas)
+                edata.worldmapdata = calcworldmap(xy.latitude, xy.longitude);
+        } else {
+            var a = axpos(0, edata, d1, diff, l2); // calculate position of middle eclipse
+            var axisdata0 = a;
+
+            // world map centered around position of middle eclipse
+            if (g_canvas)
+                edata.worldmapdata = calcworldmap(axisdata0.latitude, axisdata0.longitude);
+
+            // More info....about central eclipse
+            edata.plotdata = [];
+            var max = 120; // 2 hours
+            var step = 2;  //!! 1 ???
+            p_r(edata.gamma);
+            if (Math.abs(edata.gamma) > 0.9) {
+                step = 1;
+            }
+            var n = 0;
+            //xxxx
+            var begin = axpos(-1, edata, d1, diff, l2);
+            var end = axpos(1, edata, d1, diff, l2);
+            edata.plotdata[n++] = begin;
+            for (i = -max; i <= max; i += step) {
+                var axisdata = axpos(i / 1440, edata, d1, diff, l2);
+                if (axisdata.x) {
+                    edata.plotdata[n] = axisdata;
+                    n++;
+                }
+            }
+            edata.plotdata[n] = end;
+
+            edata.extra += ("<br /> Max duration " + hmstring(axisdata0.duration, 1) + " min");
+            edata.extra += ("<br />" + hmstring(axisdata0.latitude, 0, 1) + ' ' + hmstring(range(axisdata0.longitude + 180) - 180, 0, 2));
+        }
+        if (g_canvas) {
+            var npoints = Math.floor(get_value('p'));
+            if (npoints > D_MAGN * 2) npoints = D_MAGN * 2;
+            else if (npoints < 2) npoints = D_MAGN;
+            var positions = calc_sunrise_sunset_curves(edata, 1, npoints);
+        }
+        edata.positions = positions;
+    }
+    edata.extra += "</div>";
+    return edata;
+}
+
+function calc_sunrise_sunset_curves(edata, dist, d_magn)
+{
+    var i, j, jj, count1, poscount = 0; //!!
+    var r, r_2, l1_2, alpha, k, m, dt, lambda_middle;
+    var d_magn2 = d_magn * 2 + 2;
+    var count2 = 0;
+    var positions = [];
+    var lastlocation = MAXPOSITIONS;
+    edata.d_magn2 = d_magn2;
+
+    l1_2 = edata.l1 * edata.l1;
+    count1 = poscount;
+    edata.timediff_limit = [];
+    //p_r("poscount="+poscount+ ", d_magn="+d_magn);
+    for (i = -d_magn; i <= d_magn; i += 1, count1++) {
+        positions[i] = [];
+        k = Math.abs(i) / d_magn;
+        k = k * (edata.l1 - edata.l2) * dist;
+        k = k + edata.l2;
+        k = k * Math.sign(i);
+        k = edata.gamma + k;
+        /*       r = (edata.gamma + Math.sign(i)*(l2 + (abs(i)/(real)d_magn))*(l1-l2)); */
+        //p_r(i + " " + k);
+        if (k >= 1. || k <= -1.) {
+    //p_r("i="+i);
+            continue;
+        }
+        r = edata.gamma - k;
+        r_2 = r * r;
+        //p_r("k="+k+" i="+i + " count1="+count1 + " r="+r);
+        alpha = dacos(k);
+        dt = dsin(alpha) / edata.speed;
+        if (Math.abs(i) == d_magn) {
+            m = 0.; /* eliminate rounding errors */
+            edata.timediff_limit[(i / d_magn + 1) / 2] = dt;
+        } else if (r_2 > l1_2) {
+            m = 0.;
+        } else {
+            m = Math.sqrt(l1_2 - r_2) / edata.speed;
+        }
+        //p_r([i,m,dt*1440+"min",k,alpha]);
+        count2 = 0;
+
+        for (j = -1; j <= 1; j += 2) {
+            var coord = calc_lat_lon(edata, alpha, j, dt * j);
+            positions[i][j] = [];
+
+            lambda_middle = coord.lambda;
+            //p_r([coord, d_magn2, lambda_middle]);
+            jj = 0;
+            for (jj = -1; jj <= 1; jj++, count2 += d_magn2) {
+                if (Math.abs(i) == d_magn && !jj) {}
+                coord.lambda = (lambda_middle + (m * jj) * 360.);
+                positions[i][j][jj] = {
+                    latitude: coord.phi,
+                    longitude: coord.lambda
+                };
+                //if (jj==0 && i==0) p_r([i,j,jj,positions[i][j][jj]]);
+            }
+        }
+    }
+    return positions;
+}
+
+
+/* for eclipses in which the moon shadow does not cross the Earth entirely */
+
+function plot_sunrise_sunset_curves(edata)
+{
+    var i, j;
+    var keys = Object.keys(edata.positions);
+    //p_r(keys);
+    edata.corner_points = []; // corner points of sunrise / sunset loop needed for penumbra limit
+
+    keys.sort(function(a, b) {
+        return a - b
+    });
+    var positions = [];
+    for (i in keys) {
+        positions[i] = edata.positions[keys[i]];
+        //p_r(i);
+    }
+    var lastindex = edata.d_magn2 - 2;
+    var ctx;
+    edata.magnitudecurvepoints = {};
+    ctx = edata.worldmapdata.context;
+    var diameter = edata.worldmapdata.radius * 2;
+    // Reverse the arrays
+    var plotpoints = [];
+    var curve_count = D_MAGN / CURVECOUNT;  // should be an int !
+
+    for (i in positions) { // i are points ranging from south to north
+        for (j in positions[i]) { // j are points in left or right loop
+            for (jj = -1; jj <= 1; jj++) { // jj are points of end, max and begin @ sunrise / sunset
+                var xy = calc_x_y(edata.worldmapdata, positions[i][j][jj]["latitude"], positions[i][j][jj]["longitude"]);
+                if (!plotpoints[jj]) plotpoints[jj] = [];
+                if (!plotpoints[jj][j]) plotpoints[jj][j] = [];
+                //??
+                // begin end curves of given magnitude in steps of 1/curve_count
+                if (i % curve_count == 0 && jj == -1) {
+                    if (!edata.magnitudecurvepoints[j]) edata.magnitudecurvepoints[j] = [];
+                    //if (!edata.magnitudecurvepoints[jj][j]) edata.magnitudecurvepoints[jj][j] = [];
+                    edata.magnitudecurvepoints[j][i/curve_count] = xy;
+p_r("i="+(i/curve_count)+",j="+j+",jj="+jj+",xy="+xy.latitude+","+xy.longitude);
+                }
+                //p_r(jj + " " + j + " " + i + " " + xy.latitude + " " + xy.longitude);
+                plotpoints[jj][j][i] = xy;
+            }
+        }
+    }
+    edata.corner_points = {
+        "-1": [plotpoints[0][-1][0], plotpoints[0][1][0]],
+        "1": [plotpoints[0][-1][lastindex], plotpoints[0][1][lastindex]]
+    };
+    // if southern hemisphere, the first row with three blocks (equal i value, i = first_last_i[0])
+    // if northern hemisphere, the last row with three blocks (equal i value, i = first_last_i[1])
+    // and plot it
+    for (jj in plotpoints) {
+        ctx.beginPath();
+        for (j in plotpoints[jj]) {
+            var xlast = -1,
+                ylast = -1;
+            for (i in plotpoints[jj][j]) {
+                var xy = plotpoints[jj][j][i];
+                if (xy) {
+                    //p_r([i,j,jj]);
+                    ctx.lineWidth = 1;
+                    if (xlast != -1) {
+                        ctx.moveTo(xlast, ylast);
+                        ctx.lineTo(xy.x, xy.y);
+                        if (jj == 0) {
+                            ctx.strokeStyle = COLOR_HORIZONMAXCURVES;
+                        } else {
+                            ctx.strokeStyle = COLOR_HORIZONCURVES;
+                        }
+                        ctx.stroke();
+                    }
+                    xlast = xy.x;
+                    ylast = xy.y;
+                }
+            }
+        }
+        ctx.closePath();
+    }
+
+    //p_r([edata.corner_points[-1][0], edata.corner_points[1][0]]);
+    var north = plotpoints[0][-1][0],
+        south = plotpoints[0][-1][lastindex],
+        iindex;
+    //p_r([north, south])
+    // not both northern and southern penumbra limit
+    if (!north || !south) {
+        var keys = Object.keys(plotpoints[-1][1]);
+        //p_r(keys);
+        if (south) iindex = keys[0];
+        else iindex = keys[keys.length - 1];
+        p_r(iindex);
+
+        //p_r([iindex, plotpoints[0][-1][iindex], plotpoints[0][-1][iindex]]);
+        for (jj = -1; jj <= 1; jj += 1) { // +=1 for red line ?
+            var xylast1 = plotpoints[jj][1][iindex];
+            var xylast2 = plotpoints[jj][-1][iindex];
+
+            //p_r(jj + " " + xylast1.latitude + " " + xylast1.longitude + " " + xylast2.latitude + " " + xylast2.longitude);
+
+            p_r(xylast1.x + " " + xylast1.y + " " + xylast2.x + " " + xylast2.y)
+            ctx.beginPath();
+            ctx.moveTo(xylast1.x, xylast1.y);
+            if (jj == 0) {
+                ctx.strokeStyle = COLOR_HORIZONMAXCURVES;
+            } else {
+                ctx.strokeStyle = COLOR_HORIZONCURVES;
+            }
+            //ctx.strokeStyle = "#0000FF";
+            ctx.lineTo(xylast2.x, xylast2.y);
+            ctx.stroke();
+            ctx.closePath();
+        }
+    }
+    ////
+
+}
+
+function plot_marker(ctx, x, y, text, color, option)
+{
+    if (arguments.length < 6) option = {
+        align: "center",
+        marker: true
+    };
+    ctx.beginPath();
+    var xtext = x,
+        factor = option.align == "left" ? 1 : 2;
+
+    var textwidth = ctx.measureText(text).width;
+    if (textwidth / factor + xtext > ctx.canvas.width) xtext = ctx.canvas.width - textwidth / factor;
+    ctx.font = "10pt Arial";
+    ctx.textAlign = option["align"];
+    ctx.fillStyle = color;
+    if (option.marker) {
+        ctx.arc(x - 1, y - 1, 2, 0, Math.PI * 2, false);
+        ctx.fill();
+        y -= 10;
+    }
+    ctx.fillText(text, xtext, y);
+    ctx.closePath();
+}
+
+// graphics for drawing solar eclipse plot
+function plot_central_line(edata)
+{
+    // paste an extra transparent canvas over the worldmap
+    var diameter = edata.worldmapdata.radius * 2;
+    var ctx;
+    ctx = edata.worldmapdata.context;
+
+    // No central eclipse: just show max phase of partial eclipse
+    if (edata.flags == PARTIAL_SOLAR) {
+        var x = edata.worldmapdata.radius;
+        var y = edata.worldmapdata.radius;
+        plot_marker(ctx, x, y, "M=" + Math.floor(edata.magn * 100 + 0.5) + "% " + edate(edata.jd, 1900, 1), COLOR_TEXT2);
+    } else {
+        ctx.beginPath();
+
+        var l = edata.plotdata.length;
+        for (var i in edata.plotdata) {
+            var x = edata.plotdata[i].x;
+            var y = edata.plotdata[i].y;
+
+            var width = (Math.abs(edata.plotdata[i].width) * edata.worldmapdata.radius / 6378);
+            //p_r([i,x,y,width]);
+            if (width < 1) width = 1;
+            ctx.lineWidth = width;
+            if (edata.plotdata[i].width < 0) {  // annular: gray
+                ctx.strokeStyle = "rgba(102,102,102, 0.5)";
+            } else {                            // total: black
+                ctx.strokeStyle = "rgba(0,0,0, 0.7)";
+            }
+            if (i == 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        ctx.closePath();
+        var textcolor = COLOR_TEXT2;
+        plot_marker(ctx, edata.plotdata[0].x, edata.plotdata[0].y, "Begin " + edate(edata.plotdata[0].jd, 1900, 1), textcolor);
+        plot_marker(ctx, edata.worldmapdata.radius, edata.worldmapdata.radius, "Middle " + edate(edata.jd, 1900, 1), textcolor);
+        plot_marker(ctx, edata.plotdata[l - 1].x, edata.plotdata[l - 1].y, "End " + edate(edata.plotdata[l - 1].jd, 1900, 1), textcolor);
+    }
+    var xysubsolar = calc_x_y(edata.worldmapdata, edata.delta, edata.mu, "Sub Solar");
+    plot_marker(ctx, xysubsolar.x, xysubsolar.y, xysubsolar.descr, textcolor);
+    var text = edata.title + " eclipse of " + edate(edata.jd, 1900, -1);
+    plot_marker(ctx, 10, 10, text, COLOR_MAXMAGNITUDES, {
+        align: "left",
+        marker: false
+    });
+}
+
+function plot_eclipse_area(edata)
+{
+    edata.worldmapdata = plotworldmap(edata, true);
+}
+
+function calc_lat_lon(edata, /*SOLARDATA *psolar,*/ alph, flag, dt)
+{
+    var beta, ha;
+    beta = edata.psi + flag * alph;
+
+    /* ---------------------------------------------------------------latitude */
+    phi = dcos(beta) * edata.cd;
+
+    phi = dasin(phi);
+    ha = -1. * dtan(phi) * dtan(edata.d1); //edata.d1!!
+    if (Math.abs(ha) > 1.) /* for sure: take 12 hours */
+        ha = 90. - Math.sign(ha) * 90.;
+    else
+        ha = dacos(ha);
+    if (dsin(beta) < 0.) ha = -ha;
+    phi = datan(dtan(phi) / FLATT);
+    /* --------------------------------------------------------------longitude */
+    lambda = ha - dt * edata.d_mu * RAD + edata.mu;
+    //   lambda = -ha+dt*edata.d_mu*RAD+edata.mu;
+    lambda = range(lambda + 180, 360.) - 180.;
+    var psolar = {
+        phi: phi,
+        lambda: lambda
+    };
+    //p_r([alph,beta, flag,dt*360,phi,lambda,edata.mu ]);
+    //p_r(psolar);
+    return psolar;
+}
+/**
+ options
+ latlondata: array which contains converstion from geographical coordinates to [x,y]
+ xypos: get direct x and y instead of latitude and longitude from pos
+ color: color of the object
+ lastpoint: array [x,y] where line should start
+ font : letterfont of the text object color: color of the object
+ linestyle: style of line (default solid)
+ */
+function plot_location(ctx, pos, flag, options)
+{
+    var retval = false;
+    if (arguments.length < 3) flag = 0;
+    if (arguments.length < 5) color = 0;
+    var xy;
+    if (options.latlondata) xy = calc_x_y(options.latlondata.worldmapdata, pos.latitude, pos.longitude);
+    else xy = {
+        x: pos.x,
+        y: pos.y
+    };
+    if (xy) {
+        var ctx;
+        ctx.beginPath();
+        switch (flag) {
+            case PLOT_TEXT:
+                ctx.font = options.font ? options.font : "10pt Arial";
+                ctx.textAlign = "center";
+                ctx.fillStyle = options.color;
+                ctx.fillText(options, xy.x, xy.y + 10);
+                ctx.fill();
+                retval = true;
+                break;
+            case PLOT_CIRCLE:
+                ctx.arc(xy.x, xy.y, options.r, 0, Math.PI * 2, false);
+                context.fillStyle = options.color;
+                context.fill();
+                //        if (option.dashstyle) context.dashStyle = option.dashstyle;
+                context.lineWidth = options.width ? options.width : 1;
+                context.strokeStyle = options.fillcolor ? options.fillcolor : options.color;
+                ctx.fill();
+                retval = true;
+                break;
+            case PLOT_LINE: // extra = lastxy
+                var extra = options.lastpoint;
+                if (extra && extra.x != -1) {
+                    ctx.moveTo(extra.x, extra.y);
+                    ctx.lineTo(xy.x, xy.y);
+                    //          if (option.dashstyle) context.dashStyle = option.dashstyle;
+                    // p_r(extra.x +" "+ extra.y +" "+ xy.x +" "+ xy.y);
+                    context.lineWidth = options.width ? options.width : 1;
+                    if (options.color) ctx.strokeStyle = options.color;
+                    ctx.stroke();
+                }
+                retval = {
+                    x: xy.x,
+                    y: xy.y
+                };
+                break;
+        }
+        ctx.closePath();
+    }
+    return retval;
+}
+
+// -------------------------J.Meeus: Tables of Moon and Sun (1962) p. 62-64
+function calc_plot_penumbra_limit(edata, dist, color)
+{
+    var i, j;
+    var ifl, n, plotflag;
+    var r, d, k, k1, k_2, m, alpha, beta, dt, tt, dist1, pos;
+    var PLOTCOUNT = 120;
+    var thecolor = color;
+    var lastpoint;
+
+    dist1 = dist * (edata.l1 - edata.l2) + edata.l2;
+    // i == -1: southern limit of penumbra
+    // i ==  1: northern limit of penumbra
+    for (i = -1; i <= 1; i += 2) {
+      //  flag = 0;
+        var pos = [];
+
+        //    k = edata.gamma + i*l1;
+        k = edata.gamma + i * dist1;
+        k_2 = k * k / (RHO_1 * RHO_1);
+        tt = edata.timediff_limit[(i + 1) / 2]; /* calculated in calc_sunrise_sunset_curves() */
+
+        if (dist != 1) tt = 1/12; // 2 hours, calculate to the end
+        n = Math.floor((Math.sqrt(Math.abs(tt)) * PLOTCOUNT) + 0.5);
+//if (dist != 1) p_r("dist="+dist + " tt="+tt+ " n="+n);
+        //p_r(i + " " + edata.timediff_limit[(i+1)/2]);
+        if (dist == 1 && typeof edata.corner_points[i][0] === "undefined") {
+            continue;
+        }
+        lastpoint = false;
+        if (dist == 1) {
+            lastpoint = {
+                x: edata.corner_points[i][0].x,
+                y: edata.corner_points[i][0].y
+            };
+        }
+        for (j = 1 - n; j <= n - 1; j++) // calculate limit points for each time step (expressed in days)
+        {
+            dt = tt * Math.sin(((Math.PI / 2) / n) * j);
+            m = edata.speed * dt;
+            r = k_2 + m * m;
+            if (r > 1.) {
+                continue;
+            }
+            d = Math.acos(Math.sqrt(r));
+            //       k1 = k - i*0.00464*Math.sin(d);
+            k1 = k - i * dist1 * 0.00464 * Math.sin(d);
+            alpha = Math.atan2(m * RHO_1, k1) * RAD;
+            //         if (m<0) alpha = -alpha;  // atan2
+            beta = alpha + edata.psi;
+            phi = sphsin(d * RAD, edata.delta, beta);
+            ifl = 1;
+            if (dsin(beta) < 0) ifl = -1;
+            r = sphcos(phi, edata.delta, d * RAD, ifl);
+            lambda = r - dt * edata.d_mu * RAD + edata.mu;
+            lambda = range(lambda + 180, 360.) - 180.;
+            pos.latitude = phi;
+            pos.longitude = lambda;
+            //p_r([i,j,pos]);
+            //p_r(pos);
+            //if (debug && dist < 1) plot_location(edata.worldmapdata.context,pos,PLOT_CIRCLE, {latlondata: edata,r: 3, color: "blue" });
+            var dashstyle = (dist == 1 ? 0 : [3, 2]);
+            var res = plot_location(edata.worldmapdata.context, pos, PLOT_LINE, {
+                latlondata: edata,
+                lastpoint: lastpoint,
+                dashstyle: dashstyle,
+                color: thecolor
+            });
+
+            //if (dist != 1) p_r(res);
+            if (res) lastpoint = res;
+
+            // display maximum at this line
+            if (!j && dist != 0 && dist != 1) {
+                var percentage = Math.floor((1. - dist) * 100. + .5) + " %";
+                //plot_location(edata.worldmapdata.context, pos,PLOT_TEXT,percentage);
+            }
+        }
+ //if (dist != 1) p_r(lastpoint);
+        //p_r({x: edata.corner_points[i][1].x, y: edata.corner_points[i][1].y});
+        /* // does nothing useful
+        if (dist == 1) {
+            plot_location(edata.worldmapdata.context, {
+                x: edata.corner_points[i][1].x,
+                y: edata.corner_points[i][1].y
+            }, PLOT_LINE, {
+                lastpoint: lastpoint,
+                color: "purple"// thecolor
+            }); // finish the curve
+        }
+        */
+        //p_r(edata.corner_points,3);
+    }
+    return 0;
+}
+
+//////////////////////////////////////////////////////////
+
+// Mix RGB colors
+
+function array_rgb(inp, to_int)
+{
+    if (arguments.length > 1 && to_int)
+    {
+        return inp[0] << 16 | inp[1] << 8 | inp[2];
+    }
+    else
+    {
+        if (typeof(inp) == "string" && inp.substr(0,1) == '#')
+            inp = parseInt(inp.substr(1), 16)
+        return new Array((inp >> 16), (inp & 0x00FF00) >> 8 , inp & 0xFF);
+    }
+}
+
+// Mix RGB colors
+function mixcolor(rgb1, rgb2, rate, mult)
+{
+    var rgb3 = new Array(4)
+    rgb3[3] = 0;
+    var n = 65536;
+    for (var i=0; i<3; i++) {
+//        if (arguments.length > 3)
+//            rgb3[i] = Math.round(rgb1[i]*rgb2[i]*rate/256);
+//        else
+            rgb3[i] = Math.round(rgb1[i]*(1-rate)+rgb2[i]*rate);
+        if (rgb3[i] > 255) rgb3[i] = 255;
+        rgb3[3] += (n * rgb3[i]);
+        n /= 256;
+    }
+    return rgb3;
+}
+
+function d2h(d, pad)
+{
+    if (arguments.length == 1) pad = 0;
+    var hD="0123456789ABCDEF";
+    var h = hD.substr(d&15,1);
+    while(d>15 || pad >1) {pad--;d>>=4;h=hD.substr(d&15,1)+h;}
+    return h;
+}
+
+function mixcolorrgb(rgb1,rgb2, rate,mult)
+{
+    a = mixcolor(array_rgb(rgb1),array_rgb(rgb2), rate,mult);
+    return '#' + d2h(a[3],6);
+}
+
+
+function sign(x)
+{
+  return (x<0 ? -1 : 1);
+}
+
+function lunar_contact_times(edata, d, t1, t2, text)
+{
+    var h;
+    const MINALT = 1;  // one degree
+    var visible_here = false;
+    h = d * d - edata.gamma * edata.gamma;
+//    p_r(edata);
+    if (h < 0) return false;
+    h = Math.sqrt(h) / speed;
+//    p_r([d,t1,t2,h]);
+
+    // save extra data for drawing a picture
+    // for time before and after center eclipse
+    edata = saveplotdata(edata, h, t1, t2);
+
+    // Calculate position in local sky
+    var alfa = dasin(h / d);
+    var latlon = getlatlon();
+    var altstr=["",""], alts = [-1,-1], ts = [t1,t2];
+    var location_given = (latlon && latlon.latitude !== "" && latlon.longitude !== "");
+    if (location_given) {
+ //       p_r("alfa=" + edata.alfa + " delta=" + edata.delta + " psi=" + edata.psi);
+        for (var i = 0; i < 2; i++) {
+            altstr[i] = "";
+            var sgn = 2 * i - 1;
+            //var alfa1 = edata.alfa+180;
+            var alfa1 = edata.mu -180 + sgn * (h * 360);
+//p_r([edata.xle[ts[i]],-edata.yle[ts[i]] ]);
+            var delta_corrected = -edata.delta-edata.yle[ts[i]],
+                alfa_corrected  = alfa1+edata.xle[ts[i]]/dcos(delta_corrected);  //approximation, ok for small angles
+//p_r([delta_corrected, alfa_corrected]);
+
+            var alt = sphsin(delta_corrected, latlon.latitude, latlon.longitude - alfa_corrected);
+//            p_r("de=" + (delta_corrected) + " alt=" + alt);
+            if (location_given) {
+                alts[i] = alt;
+                if (alt > MINALT) {
+                    if (t1 != 0 || t2 != 6) {
+                        visible_here = true;  // mark as visible here unless start or end of penumbral phase
+                    }
+                    altstr[i] = " : " + round(alt,0) + "&deg;";
+                }
+            }
+        }
+    }
+
+    if (t1 == t2) { // middle of eclipse
+        edata.tle[t1] = text + " " + edate(jd - h, 1900, 1) + altstr[0];
+    } else {
+        edata.tle[t1] = "start " + text + " " + edate(jd - h, 1900, 1) + altstr[1];
+        edata.tle[t2] = "end " + text + " " + edate(jd + h, 1900, 1) + altstr[0];
+    }
+    if (location_given) {
+        if (alts[0] <= MINALT) {
+            edata.tle[t2] = "<span class='grayed_out'>"+edata.tle[t2]+"</span>";
+        }
+        if (alts[1] <= MINALT) {
+            edata.tle[t1] = "<span class='grayed_out'>"+edata.tle[t1]+"</span>";
+        }
+    }
+
+    // very begin and end of eclipse
+    if (text == 'penumbral') {
+        edata.lunarstart = edata.tle[t1];
+        edata.lunarend = edata.tle[t2];
+    }
+    if (visible_here) {
+        return VISIBLEHERE;  // to be checked yet
+    }
+    return true;
+}
+
+function saveplotdata(edata, dt, t1, t2)
+{
+    var data = rect_coord(edata, -dt);
+
+    edata.xle[t1] = -data[0];
+    edata.yle[t1] = -data[1];
+    if (t1 != t2) {
+        data = rect_coord(edata, dt);
+        edata.xle[t2] = -data[0];
+        edata.yle[t2] = -data[1];
+    }
+
+    return edata;
+}
+
+/*
+** Empirical formulae for difference between ephemeris time
+** and universal time (GMT).
+** Adapted from J.Meeus Astronomical Formulae for Calculators.
+*/
+function deltat(jd)
+{
+   var t,year=Math.floor((jd/36525+19)*100), delta_t;
+
+   if (year >= 1900 && year <= 2050)
+   {
+      t = (year-1900)/90.;
+      delta_t = t*t;
+   }
+   else if (year > 1700 && year < 1900)
+   {
+      delta_t = 0;
+   }
+   else
+   {
+      t = (year-1900)/100.;
+      delta_t = 24.6 + t*(72.32 + 29.95*t);
+      delta_t /=  60.;  /* express it in minutes */
+   }
+   delta_t /= 1440.;   /* expressed in days rather than minutes */
+   return delta_t;
+}
+/* greatest phase at partial eclipses */
+function calc_greatest_phase(edata)
+{
+    var ha, s;
+
+    phi = dasin(dcos(edata.d1) * dcos(edata.psi));
+    if (edata.gamma < 0) phi = -phi;
+    ha = dacos(-dtan(phi) * dtan(edata.d1));
+    p_r(edata.d1);
+    s = Math.sign(edata.gamma) * Math.sign(edata.psi);
+    lambda = edata.mu + s * ha;
+    return {
+        latitude: phi,
+        longitude: lambda
+    };
+}
+
+
+/* -------calculate the position of the axis of the lunar shadow at time jd */
+// -------------------------J.Meeus: Tables of Moon and Sun (1962) p. 62-64
+function axpos(timediff, edata, d1, diff, l2)
+{
+    var iflag, str, b, c, r1, B, H, h, x, y, y_1, n, q3, startend = false;
+
+    //p_r(timediff);
+    if (Math.abs(timediff) == 1) {
+        startend = timediff;
+        var gam1 = edata.gamma / RHO_1;
+        var compl = Math.sqrt(1 - gam1 * gam1);
+        var alph = dacos(gam1);
+        timediff = compl / (edata.speed) * startend;
+    }
+
+
+    var d_mu = edata.d_mu;
+    var a = rect_coord(edata, timediff);
+    x = a[0];
+    y = a[1];
+    // ------------------------------------take flattening of earth in account
+    y_1 = a[1] * edata.sd / dsin(edata.delta);
+    var r1 = Math.sqrt(x * x + y_1 * y_1);
+    var phi = 9999.;
+    // -----------------------r1 is distance of axis shadow to center of earth
+    if (startend) r1 = 1;
+    if (r1 > 1.) return false; // falls beyond Earth
+    B = Math.sqrt(1. - r1 * r1);
+    h = B * edata.cd - y_1 * edata.sd;
+    H = datan2(x, h);
+    var phi1 = dasin(y_1 * edata.cd + B * edata.sd);
+    var lambda = H - timediff * d_mu * RAD + edata.mu + diff;
+    // ---------------------------------------------------------------latitude
+    phi = datan(dtan(phi1) / FLATT);
+    // --------------------------------------------------------------longitude
+    lambda = range(lambda + 180.) - 180.;
+
+    // -------------------------------------------------------for maximum only
+
+    //   if (timediff != 0) return true;
+    c = a[2] + d_mu * (edata.sd * y - edata.cd * B);
+    b = x * d_mu * dsin(edata.delta) - a[3];
+    L2 = 2. * (l2 + B * Math.abs(edata.tan_f2));
+    n = Math.sqrt(c * c + b * b);
+
+    // --------------------------------------duration of total / annular phase
+    var duration = L2 / n;
+    q3 = (x * c - a[1] * b) / n;
+
+    // ----------------------------------------------------------width of path
+    var width = 6378.140 * L2 / (Math.sqrt(q3 * q3 + B * B));
+    // -----------------------altitude and azimuth of sun at middle of eclipse
+    var altitude = dasin(B);
+    var iflag = 1;
+    if (dsin(H) > 0.) iflag = -1;
+    var azimuth = range(sphcos(altitude, phi, edata.delta, iflag));
+
+    var axisdata = {
+        latitude: phi,
+        longitude: range(lambda + 180) - 180,
+        duration: duration * 1440, // expressed in minutes
+        width: width,
+        altitude: altitude,
+        azimuth: azimuth,
+        jd: edata.jd + timediff // expressed in days since 19000101 J.Meeus epoch
+    };
+    if (g_canvas && edata.worldmapdata) {
+        var xy = calc_x_y(edata.worldmapdata, phi, lambda);
+        if (xy) {
+            axisdata.x = xy.x;
+            axisdata.y = xy.y;
+        }
+    }
+
+    return axisdata;
+}
+
+function rect_coord(edata, dt)
+{
+    var spsi = dsin(edata.psi);
+    var cpsi = dcos(edata.psi);
+    var k = dt * edata.speed;
+    //p_r("dt=" + dt + " k=" + k);
+    var xc = k * cpsi + edata.gamma * spsi;
+    var yc = edata.gamma * cpsi - k * spsi;
+    var dxc = edata.speed * cpsi;
+    var dyc = -edata.speed * spsi;
+    var res = new Array(xc, yc, dxc, dyc);
+    //p_r(res);
+    return res;
+}
+
+
+// plot a single moon in the shadow
+function saveplotmoon(edata, dt, index)
+{
+    var data = rect_coord(edata, dt);
+
+    edata.xle[index] = data[0];
+    edata.yle[index] = data[1];
+}
+
+
+//  displaymoon(pdata, data.xc, data.yc);
+
+// plot a single moon in the shadow
+function plotmoon(edata, dt)
+{
+    var data = rect_coord(edata, dt);
+
+
+    displaymoon(pdata, data.xc, data.yc);
+}
+
+function calculate(rewrite, number, doplot, pos)
+{
+    if (arguments.length < 3) doplot = false;
+    g_eclipsedata = false; // reset all eclipse data
+    if (typeof(rewrite) == UNDEFINED)
+        rewrite = false;
+
+    if (typeof(number) == UNDEFINED) {
+        i = eclipse_number(document.input.month.value, document.input.year.value);
+        if (i == OUT_OF_RANGE) return false;
+        number = i;
+    }
+    ee = new Array();
+    var i = 0;
+    if (typeof pos == UNDEFINED) {
+        pos = getlatlon();
+    }
+    var notes = "";
+    if (haslocation(pos)) {
+        notes += "Local circumstances for above location. <br /><small>Lunar eclipse events visible in your location show altitude above horizon, otherwise they are grayed out.</small><br />";
+    }
+    notes += "Times expressed in UTC";
+    if (hastimezone(pos)) {
+        notes += ((pos.utcdiff > 0 ? "+" : "") + hmstring(pos.utcdiff, 1));
+    }
+    if (notes) {
+        notes += "<br />";
+        $("div#notes").html(notes).show();
+    } else {
+        $("div#notes").hide();
+    }
+    var visible_here = false;
+    // lunar and solar eclipses
+    for (lunar = 0; lunar < 2; lunar++) {
+        // allow 2 eclipses with one lunation interval
+        for (var j = 0; j < 2; j++) {
+            edata = eclipse_maindata(number, j, lunar);
+            if (edata) {
+                edata = eclipse_auxdata(edata);
+                ee[i++] = edata;
+                // check whether visible locally
+
+                //p_r("here=" + visible_here + " lunar=" + lunar + " " + pos.latitude + " " + pos.longitude);
+                if (!visible_here && !lunar && pos.latitude !== '' && pos.longitude !== '') {
+
+                    if (edata = calc_local_phases(edata, pos.latitude, pos.longitude)) { // calculate local beginning, middle and end
+                        visible_here = true;
+                    }
+                    edata.visible_here = visible_here;
+                }
+            }
+        }
+    }
+
+    if (rewrite) {
+        if (rewrite == CHECKLOCAL && !visible_here)
+            return false;
+        $("#result").html("");
+        //    $("title").html(title);
+
+        $("#result").append("<table class=\"eclipseresult\"></table>");
+        $("#result").append("<table class=\"qqq\"></table>");
+
+        g_eclipsedata = [];
+        for (var i = 0; i < ee.length; i++) {
+            if (!ee[i].lunar) { // save solar eclipse data in global
+                g_eclipsedata[i] = ee[i];
+                //p_r(g_eclipsedata[i]);
+            }
+            outputdata(ee[i], i);
+            if (g_canvas) {
+                var ok = draweclipse(ee[i], i);
+                var type = "solar";
+                if (ee[i].lunar) type = "lunar";
+                var drawing = "#canvas_" + type + "_" + i;
+                //p_r(drawing + " ok=" + ok);
+                if (ok) $(drawing).show();
+                else $(drawing).hide();
+            }
+        }
+    }
+    $(".resultonly").show();
+    //p_r([doplot!=UNDEFINED ,doplot,parseInt(get_value("m")), (doplot!=UNDEFINED && doplot)])
+    // draw globe for first solar eclipse
+    if ((doplot != UNDEFINED && doplot) || parseInt(get_value("m"))) {
+        plot_eclipse_area(g_eclipsedata[0]);
+    }
+    return true;
+}
+
+var iflagtable = new Array(0, -1, 1);
+
+function calc_local_phases(edata, phi, lambda) // calculate local beginning, middle and end
+{
+    var i, k;
+    var evening = -1;
+    var asun_pos = false;
+    var max_below_horizon = false;
+    var phases = new Array("Begin", "Maximum", "End");
+    edata.max_below_horizon = false;
+    for (i = 0; i < 3; i++) {
+        if (!(edata = solar_contact_times(edata, i, phi, lambda))) return false; // no eclipse at this location
+        k = iflagtable[i] + 1;
+
+        edata.tse[k] = "";
+        if (!i && edata.theta0 < 0) evening = 1;
+        //      var azimuth = range(sphcos(edata.alt_sun[k],phi,edata.delta,iflag));
+        var ha = sphcos(phi, edata.delta, 0, evening);
+        var dt = (range(ha - lambda + edata.mu + 180) - 180) / (1.0027 * 360.);
+
+        if (edata.alt_sun[k] > 0) { // above horizon
+            asun_pos = true;
+            edata.tse[k] = phases[k] + " " + edate(edata.tle[k], 1900, 1) + (i == 0 ? " M=" + round(edata.maximum_local_magn, 2) : "") +
+                " alt=" + round(edata.alt_sun[k], 0) + "&deg;";
+        } else if (!max_below_horizon) { // below horizon: show time of sun(rise|set)
+            if (!(edata = solar_contact_times(edata, 0, phi, lambda, dt))) return false;
+
+            edata.tse[k] = "Sun" + (evening == 1 ? "set" : "rise") + " " + edate(edata.jd + dt, 1900, 1) + " M=" + round(edata.local_magn, 2);
+            if (i == 0)
+                edata.max_below_horizon = max_below_horizon = true;
+        }
+    }
+
+    if (asun_pos) {
+        edata.extra += "<br/><div class=\"localsolar\">Locally visible on position<br />" + hmstring(phi, 0, 1) + " " + hmstring(lambda, 0, 2);
+
+        for (i = 0; asun_pos && i < 3; i++) {
+            if (edata.tse[i] != "")
+                edata.extra += "<br/>" + edata.tse[i];
+        }
+        edata.extra += "<p class=\"small\">Click on 'Show world map' to select another location.</p>";
+        edata.extra += "</div>";
+    }
+    p_r(edata.extra)
+    if (edata.maximum_local_magn && asun_pos) return edata;
+    return false;
+}
+
+function solar_contact_times(edata, k, phi, lambda, timestamp) // Formulae from: J.Meeus Tables of Moon and Sun
+{
+    var h, delta_x, delta_y, zeta, phi2, ha, u, v, du, dv, n, delta_P = 0.,
+        sl, cl,
+        sH, cH, c, dt, timediff, q, N, P, Z, a, D, L1, L2;
+    var iflag = 1,
+        all_eclipse;
+
+    // timestamp given
+    if (typeof(timestamp) != UNDEFINED) {
+        dt = timestamp;
+        all_eclipse = false;
+    } else {
+        all_eclipse = true;
+        if (k != 0)
+            dt = edata.tle[1] - edata.jd; // first approximation : maximum
+        else
+            dt = 0.;
+        iflag = iflagtable[k];
+    }
+    h = 2. * Math.PI;
+    phi2 = datan(FLATT * dtan(phi));
+    sl = FLATT * dsin(phi2);
+    cl = dcos(phi2);
+    /*
+       if (accur)          // take altitude above sea level into account
+       {
+          get_sin_cos_delta();
+          sl = sl + altitude * sind(phi);
+          cl = cl + altitude * cosd(phi);
+       }
+    */
+
+    timediff = 1. / 24.; // start with one hour
+    while (Math.abs(timediff) > 1 / 2880) // more than half a minute error
+    {
+        var aa = rect_coord(edata, dt);
+        var xc = aa[0],
+            yc = aa[1];
+        var dxc = aa[2],
+            dyc = aa[3];
+        ha = (lambda - edata.mu + dt * 1.0027 * 360.);
+        edata.theta0 = range(-ha + 180) - 180;
+        sH = dsin(ha);
+        cH = dcos(ha);
+        delta_x = cl * sH;
+        delta_y = sl * edata.cd - cl * cH * edata.sd;
+        zeta = sl * edata.sd + cl * cH * edata.cd;
+        u = xc - delta_x; // calculate local distance between
+        v = yc - delta_y; // centers of Sun and Moon
+        du = dxc - h * cl * cH;
+        dv = dyc - h * delta_x * edata.sd;
+        L1 = l1 - edata.tan_f2 * zeta;
+        L2 = l2 + edata.tan_f2 * zeta;
+        n = Math.sqrt(du * du + dv * dv);
+
+        if (!all_eclipse) break;
+
+        if (!iflag) // middle of local eclipse
+            c = 0;
+        else // beginning (iflag = -1)
+        { // or end    (iflag = 1) of partial phase
+            delta_P = (u * dv - v * du) / (n * L1);
+            delta_P = dasin(delta_P); // cos (delta_P) > 0 : end
+            c = dcos(delta_P); // cos (delta_P) < 0 : beginning
+            if ((iflag ^ sign(c)) < 0) {
+                delta_P = 180 - delta_P;
+                c = dcos(delta_P);
+            }
+        }
+        timediff = (L1 * c - (u * du + v * dv) / n) / n;
+        dt = dt + timediff; // new approximation of dt
+    } // while
+
+    edata.dsun_by_dmoon = (L1 - L2) / (L1 + L2);
+
+    //p_r("k=" + k + " u=" + u + " v=" + v);
+
+    q = datan2(delta_x, delta_y);
+
+    if (all_eclipse) {
+        N = datan2(du, dv);
+        if (iflag)
+            P = N + delta_P;
+        else {
+            D = Math.abs((u * dv - v * du) / n);
+            edata.maximum_local_magn = (L1 - D) / (L1 - L2);
+            if (edata.maximum_local_magn < 0) return false;
+            P = -datan(dv / du);
+            if (sign(dcos(P)) != sign(v)) P = P + 180;
+        }
+    } else {
+        D = Math.sqrt(u * u + v * v);
+        edata.local_magn = (L1 - D) / (L1 - L2);
+        P = datan2(u, v);
+    }
+    Z = P - q;
+    if (all_eclipse) {
+        edata.pos_angle[iflag + 1] = range(Z);
+        edata.tle[iflag + 1] = edata.jd + dt;
+        edata.alt_sun[iflag + 1] = dasin(zeta);
+    }
+    // Z = zenithal position angle
+    // uc = x coordinate
+    // vc = y coordinate
+    a = Math.sqrt(u * u + v * v);
+    uc = a * dsin(Z);
+    vc = a * dcos(Z);
+    if (edata.local_magn < 0) return false;
+    else if (k == 0 && edata.alt_sun[1] < -15) return false; // sun below horizon
+
+    if (all_eclipse)
+        kk = iflag + 1;
+    else
+        kk = 3;
+    //p_r("--- kk=" + kk + " iflag+1="+(iflag+1)+" altsun="+dasin(zeta));
+
+    // position of Moon relative to Sun, same values, different indexes
+    edata.xle[kk] = uc;
+    edata.yle[kk] = vc;
+
+    // p_r(edata, "edata");
+    return edata;
+}
+
+function getfield(field, defvalue='')
+{
+    var value = parsefield(field.value);
+    if (isNaN(value) || value < $(field).attr("min") || value > $(field).attr("max")) {
+p_r(value);
+        if (defvalue !== '') {
+            $(field).css({"border-color": "red"});
+        }
+        field.value = value = defvalue;
+    } else {
+        $(field).css({"border-color": "#333"});
+    }
+    return value;
+}
+
+function getlatlon()
+{
+    var longitude=getfield(document.input.lon),
+        latitude =getfield(document.input.lat),
+        utcdiff  =getfield(document.input.utcdiff, 0);
+
+//p_r(parsefield(document.input.lat.value))
+
+    if (document.input.lat.value === "" || document.input.lon.value === "")
+        $(".localonly").attr("disabled",1);
+    else
+        $(".localonly").removeAttr("disabled");
+//p_r([latitude,longitude])
+    setcookievalue('eclipsedata', latitude + ';' + longitude);
+    return {latitude: latitude, longitude: longitude, utcdiff: utcdiff }
+}
+
+function haslocation(pos)
+{
+    return (pos.longitude != "" && pos.latitude != "");
+}
+
+function hastimezone(pos)
+{
+    return (pos.utcdiff);
+}
+function next(inc, here, doplot)
+{
+    if (doplot == UNDEFINED) doplot = false;
+    var pos = getlatlon();
+    if (typeof(here) != UNDEFINED && here && pos.latitude != '' && pos.longitude != '') {
+        while (!calculate(CHECKLOCAL, eclnumber + inc));
+        return true; // calculate(1,eclnumber);
+    }
+    return calculate(1, eclnumber + inc, doplot);
+}
+
+function showSource(x)
+{
+    x = x.replace(/&/g, "&amp;");
+    x = x.replace(/</g, "&lt;");
+    x = x.replace(/>/g, "&gt;\n");
+    return '<pre>' + x + '</pre>';
+}
+
+
+function writetablerow(header, content)
+{
+    return (
+        "    <tr>\n" +
+        "      <td class='eclipsedatarow'> " + header + "\n" +
+        (typeof(content) == UNDEFINED ? "" :
+            "      \n" + content) + "</td>\n" +
+        "    </tr>\n");
+}
+
+
+function outputdata(edata, ind)
+{
+    //    if (ind) return;
+    var cid = (edata.lunar ? "_lunar_" : "_solar_") + ind;
+    var title = ".:" + edata.title + " Eclipse of the " + (edata.lunar ? "Moon" : "Sun") + ":.";
+    //p_r($("table.result").css("width"));
+    var w = 300,
+        h = 300;
+    var picture = ""; // "<td>&nbsp;</td>";
+    if (g_canvas) {
+        picture = "<td class=\"calcresult\"><canvas class=\"resultdrawing\" width=\"" + w + "\" height=\"" + h + "\" id=\"canvas" + cid + "\"></canvas></td>";
+    }
+    var s = "<tr><td><table id='ecl" + cid + "' class='result result_" + (edata.lunar ? "lunar" : "solar") + (edata.visible_here ? "_here" : "") + "'>\n" +
+        "<tr><td class='eclipsetitle'>" + title + "</td></tr>" +
+
+        writetablerow(edate(edata.jd, 1900)) +
+        writetablerow(edata.extra) +
+        writetablerow("Gamma", round(edata.gamma, 4)) +
+        writetablerow("L<sub>1</sub>", round(edata.l1, 4)) +
+        writetablerow("D<sub>sun</sub>", round(edata.delta, 1)) +
+        (edata.debug ?
+            writetablerow("????", edata.debug) : "") +
+        "</table>" +
+        "</td>" + picture + "</tr>" +
+        "";
+    // Overwrite form month, year
+    if (ind == 0) {
+        var d = jdtodatetime(edata.jd, 1900);
+        document.input.year.value = d[0];
+        document.input.month.value = d[1];
+    }
+    //p_r($("table.eclipseresult > tr:last").html());
+    //p_r($("#canvas" + cid));
+    if (!$("table.eclipseresult > tr:last").html())
+        $("table.eclipseresult").append(s);
+    else
+        $("table.eclipseresult > tr:last").after(s);
+    // click to draw area of solar eclipse
+    if (!edata.lunar && g_canvas) {
+        $("table#ecl" + cid).append("<tr><td class=\"plotworld\" colspan=\"2\"><a href=\"javascript:void(0);\" onclick=\"plot_eclipse_area(g_eclipsedata[" + ind + "]);\">&lt;&lt;Show world map&gt;&gt;</a></td></tr>");
+    }
+
+}
+
+issrc = "";
+
+var g_iscookie = false; // use HTML5 local storage
+if (get_value('ck')) g_iscookie = true; // use cookies
+
+
+function getcookievalue(name)
+{
+    var res = '';
+    if (g_iscookie) {
+        var ind;
+        name += '=';
+        str = document.cookie;
+        if ((ind = str.indexOf(name)) != -1)
+        {
+            var end = str.indexOf(';', ind);
+            if (end == -1) end = str.length;
+            str = str.substr(ind + name.length, end - ind - name.length);
+            res = unescape(str);
+        }
+    } else {
+        res = localStorage.getItem(name);
+        if (res == null) res = "";
+    }
+    //alert(str);
+    return res;
+}
+
+
+function setcookievalue(name, value)
+{
+    if (g_iscookie) {
+        name += '=';
+
+        var expDays = 100;
+        var exp = new Date();
+        exp.setTime(exp.getTime() + (expDays * 24 * 60 * 60 * 1000));
+
+        var expire = '; expires=' + exp.toGMTString();
+        var str = name + escape(value) + expire;
+        document.cookie = str;
+    } else {
+        localStorage.setItem(name, value);
+    }
+}
+
+
+var g_output = '';
+
+function output(x)
+{
+    //if (typeof(issrc) != UNDEFINED && issrc==1) { x= showSource(x);  }
+    g_output += x;
+}
+
+function showSource(x)
+{
+    x = x.replace(/&/g, "&amp;");
+    x = x.replace(/</g, "&lt;");
+    x = x.replace(/>/g, "&gt;\n");
+    return '<pre>' + x + '</pre>';
+}
+
+////////////////////// CANVAS OBJECT ///////////////////////////
+
+// http://www.tutorialspoint.com/html5/canvas_create_gradients.htm
+
+function circle(ctx, x, y, r, carray)
+{
+    if (typeof(carray) == "object") {
+
+        ctx.beginPath();
+        var rad = ctx.createRadialGradient(x, y, 0, x, y, r);
+        for (var i in carray) {
+            //      p_r(i + "=" + carray[i]);
+            rad.addColorStop(i, carray[i]);
+        }
+        ctx.fillStyle = rad;
+        ctx.arc(x, y, r, 0, Math.PI * 2, false);
+        ctx.fill();
+    } else { // single open circle
+        //    ctx.moveTo(x+r,y);
+        ctx.beginPath();
+
+        ctx.arc(x, y, r, 0, 2 * Math.PI, false);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = carray;
+        ctx.stroke();
+        ctx.closePath();
+    }
+}
+
+
+function drawEarthShadow(ecldata, index)
+{
+    var l1 = ecldata.l1;
+    var l2 = 0.5460 - ecldata.l1;
+
+    // get the canvas element using the DOM
+    var canvas = document.getElementById('canvas_' + (ecldata.lunar ? "lunar_" : "solar_") + index);
+    //p_r('canvas_' + (ecldata.lunar ? "lunar_" : "solar_") + index);
+    var w = canvas.width;
+    var h = canvas.height;
+    //p_r([w, h]);
+
+    var umbradiameterinpixels = w * 0.4; // diameter of umbra
+
+    var degreeinpixels = umbradiameterinpixels / (2 * (0.7404 + l2)); // diameter: 0.7404+l2 = radius of umbra in degrees
+
+    //  var moondiameterinpixels = 2*(0.2725+l2)*degreeinpixels; // diameter
+    var moondiameterinpixels = 2 * (0.2725) * degreeinpixels; // diameter
+
+    var um_pen = (0.7404 + l2) / (1.2847 - l2);
+    var penumbradiameterinpixels = umbradiameterinpixels / um_pen;
+
+    // Make sure we don't execute when canvas isn't supported
+    if (canvas.getContext) {
+
+        var carray = new Array();
+
+        carray[0] = "rgba(99,10,0,0.9)"; // center
+        carray[um_pen * 0.8] = "rgba(99,12,0,0.7)";
+        carray[um_pen * 0.90] = "rgba(66,22,0,0.7)";
+        carray[um_pen * 0.97] = "rgba(66,22,0,0.6)";
+        carray[um_pen * 1.05] = "rgba(33,33,33,0.4)";
+        carray[um_pen * 1.30] = "rgba(66,66,66,0.3)";
+        carray[um_pen * 1.50] = "rgba(66,66,66,0.1)";
+        carray[1] = "rgba(127,63,0,0)";
+
+        // use getContext to use the canvas for drawing
+        var ctx = canvas.getContext('2d');
+
+        ctx.fillStyle = "rgb(0,0,0)";
+        ctx.fillRect(0, 0, w, h);
+
+        var imageObj = new Image();
+
+        imageObj.onload = function() {
+
+            ctx.arc(w / 2, h / 2, penumbradiameterinpixels / 2, 0, 2 * Math.PI, false);
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = '#CCCC66';
+            ctx.stroke();
+
+            // coordinates of Moon's center
+            for (ind in ecldata.xle) {
+                var xmoon = ecldata.xle[ind] * degreeinpixels + w / 2 - moondiameterinpixels / 2;
+                var ymoon = ecldata.yle[ind] * degreeinpixels + h / 2 - moondiameterinpixels / 2;
+                //p_r("ind="+ind + " x,y="  + ecldata.xle[ind] + " " + ecldata.yle[ind] + " coord="+xmoon + " " + ymoon);
+                //edata, dt
+                ctx.drawImage(imageObj, xmoon, ymoon, moondiameterinpixels, moondiameterinpixels);
+                // http://www.devirtuoso.com/2011/09/creating-an-image-mask-with-html-5-canvas/
+            }
+            //ctx.save();
+            //ctx.clip();
+            circle(ctx, w / 2, h / 2, penumbradiameterinpixels / 2, carray);
+            //ctx.restore();
+        };
+        imageObj.src = 'fullmoon.png';
+
+    } else {
+        //    alert('You need Safari or Firefox 1.5+ to see this demo.');
+    }
+    return true;
+}
+
+function drawSolarEclipse(ecldata, index)
+{
+    if (!ecldata.visible_here) return false;
+    // get the canvas element using the DOM
+    var canvasel = 'canvas_solar_' + index;
+    var canvas = document.getElementById(canvasel);
+
+
+    var bgcolor = "#80C0FF";
+    var higheclipse = 0.90;
+    var imageObj;
+    p_r(ecldata.maximum_local_magn);
+
+    // RARE event of TOTAL eclipse
+    if (ecldata.maximum_local_magn >= 1 && !ecldata.max_below_horizon) {
+        bgcolor = "#000070";
+        imageObj = new Image(); // picture of total eclipse
+        var imagecx = new Array();
+
+        // at least 90% eclipsed
+    } else if (ecldata.maximum_local_magn > higheclipse) {
+        p_r(ecldata.maximum_local_magn);
+        p_r(ecldata.alt_sun[1]);
+        bgcolor = mixcolorrgb(bgcolor, "#0020F0", (ecldata.maximum_local_magn - higheclipse) / (1 - higheclipse));
+    } else {
+        if (ecldata.alt_sun[1] < 40)
+            bgcolor = mixcolorrgb("#FFDDBB", bgcolor, ecldata.alt_sun[1] / 40);
+    }
+    $("#" + canvasel).css("background-color", bgcolor);
+    var w = canvas.width;
+    var h = canvas.height;
+
+    var unit = w * 0.3;
+    var sundiameterinpixels = unit * 0.004664 / ecldata.tan_f2; // diameter of sun
+    var moondiameterinpixels = sundiameterinpixels / ecldata.dsun_by_dmoon; // diameter of moon
+    var degreeinpixels = unit / 0.5332; // 0.5332 mean angular diameter of Sun
+
+    //p_r("moon=" + moondiameterinpixels + " sun=" + sundiameterinpixels);
+
+    // Make sure we don't execute when canvas isn't supported
+    if (canvas.getContext) {
+
+        var carraysun = new Array();
+        var carraymoon = new Array();
+
+        carraysun[0] = "#FFFFFF";
+        carraymoon[0] = bgcolor; // make eclipsed part of Sun 'invisible'
+
+
+        // use getContext to use the canvas for drawing
+        var ctx = canvas.getContext('2d');
+
+        // nontotal eclipse (by far the most cases !) draw the Sun
+        if (typeof(imageObj) != "object")
+            circle(ctx, w / 2, h / 2, sundiameterinpixels / 2, carraysun);
+
+        var colors = new Array("#007F00", "#000000", "#BF0000");
+        var xmoon = new Array(),
+            ymoon = new Array();
+
+        for (ind in ecldata.xle) {
+            xmoon[ind] = -ecldata.xle[ind] * moondiameterinpixels * 1.85 + w / 2; // - moondiameterinpixels/2;
+            ymoon[ind] = -ecldata.yle[ind] * moondiameterinpixels * 1.85 + h / 2; // - moondiameterinpixels/2;
+        }
+        // Display image of total eclipse in the rare event a total eclipse occurs
+        if (typeof(imageObj) == "object") {
+
+            imageObj.onload = function() {
+                imagecx.cx = imageObj.width;
+                imagecx.cy = imageObj.height;
+                var xfact = imagecx.cx * moondiameterinpixels / imagecx.cxm;
+                var yfact = imagecx.cy * moondiameterinpixels / imagecx.cym;
+
+                ctx.drawImage(imageObj, w / 2 - xfact / 2, h / 2 - yfact / 2, xfact, yfact);
+            };
+
+            imageObj.src = 'totaleclipse.png';
+            // diameter of moon circle in image assumed in the center of the image
+            imagecx.cxm = 102;
+            imagecx.cym = 102;
+
+        } else {
+            // display greatest phase on sunrise/set rather than maximum below horizon
+            if (ecldata.max_below_horizon)
+                circle(ctx, xmoon[3], ymoon[3], moondiameterinpixels / 2, carraymoon);
+            else
+                circle(ctx, xmoon[1], ymoon[1], moondiameterinpixels / 2, carraymoon);
+        }
+        // 0 == begin, 1 == max, 2 == end display max circle only if below horizon
+        for (ind = 0; ind <= 2; ind++) {
+
+            if (ind != 1 || ecldata.max_below_horizon) // gray out invisible phases
+                circle(ctx, xmoon[ind], ymoon[ind], moondiameterinpixels / 2, ecldata.alt_sun[ind] < 0 ? mixcolorrgb(bgcolor, colors[ind], 0.16) : colors[ind]);
+        }
+    }
+    return true;
+}
+
+function draweclipse(ecldata, index)
+{
+    //p_r(edata);
+    var content = "",
+        retval;
+    if (ecldata.lunar)
+        retval = drawEarthShadow(ecldata, index);
+    else
+        retval = drawSolarEclipse(ecldata, index);
+    return retval;
+}
+//not standardized yet
+// set proper viewport (better than the viewport meta tag)
+//  <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=0.5, maximum-scale=2.0, user-scalable=yes">
+function zoom(el, value) {
+    //  document.getElementById('idofyourelement').style.zoom=value;
+    $(el).css("zoom", value);
+    $(el).css("-moz-transform", "scale(" + value + ")");
+    $(el).css("-moz-transform-origin", "0 0");
+}
+
+function togglefullscreen()
+{
+    var fullscreenstate = document.fullscreenElement;
+    (document.fullScreenElement && document.fullScreenElement !== null) || // alternative standard method
+    (document.mozFullScreen || document.webkitIsFullScreen);
+    console.log(fullscreenstate);
+    if (!fullscreenstate) {
+        try {
+            //            document.documentElement.requestFullscreen({navigationUI:'hide'});
+            document.documentElement.requestFullscreen();
+        } catch (e) {
+            p_r(e);
+        }
+    }
+    else { // useless, handle by esc key
+        document.exitFullscreen();
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// <?
+// Popup on site
+
+function slowhide()
+{
+    $("#modal-background").hide("slow");
+    $("#modal-content").hide("slow");
+}
+
+var __loaded = false;
+function loadpopup()
+{
+    if (__loaded) return;  // waarom 2x geladen ???
+    __loaded = true;
+    console.log("load popup");
+    togglepopup();
+//    setTimeout("slowhide()", 10000);
+}
+
+function togglepopup(active=false)
+{
+    console.log(active);
+    if (active) {
+        $("#modal-background").addClass("active");
+        $("#modal-content").addClass("active");
+    } else {
+        $("#modal-background").removeClass("active");
+        $("#modal-content").removeClass("active");
+    }
+    if (!$("#modal-content").hasClass("active")) {
+        $("#modal-content").empty();
+    } else {
+        $("#modal-content").append("<button id=\"modal-close\" onclick=\"togglepopup(false);\"></button>");
+    }
+    var top  = ($(window).height() - $("#modal-content").outerHeight()) / 2;
+    var left = ($(window).width() - $("#modal-content").outerWidth()) / 2;
+    //p_r($("#modal-content").outerWidth());
+    $("#modal-content").css({"left" : left, "top" : top});
+}
+
+function popuptext(text)
+{
+    $("#modal-content").html(text);
+    togglepopup(true);
+    $("#modal-content").dblclick(function() { togglepopup(false)  } );  // remove if one clicks on it
+}
+
+function nl2br (str)
+{
+    var breakTag = '<br />';
+    var res = str+'';
+    res = res.replace(/([^>\r\n]?)(\r\n|\n\r|\r|\n)/g, '$1' + breakTag + '$2');
+    return res;
+}
+///////////////////////////////////////////////////////
+// Calculate according to orthographic projection
+function calc_x_y(worldmapdata, lat, lon, descr)
+{
+    var dist = 90 - sphsin(lat, worldmapdata.latitude, worldmapdata.longitude - lon);
+    if (!descr) descr = "";
+
+    // only within displayed half of the world
+    if (dist < 90) {
+        heading = sphcos(90 - dist, worldmapdata.latitude, lat, Math.sign(range(worldmapdata.longitude - lon + 180, 360) - 180));
+        dist = worldmapdata.radius * dsin(dist);
+        var y = dist * -dcos(heading) + worldmapdata.radius;
+        var x = dist * -dsin(heading) + worldmapdata.radius;
+        return {
+            x: x,
+            y: y,
+            descr: descr,
+            latitude: lat,
+            longitude: lon
+        };
+    }
+    return false;
+}
+
+// Calculate according to orthographic projection
+function calc_x_y_reverse(worldmapdata, x, y, mouseover) {
+    x = x - worldmapdata.radius;
+    y = y - worldmapdata.radius;
+    if (arguments.length < 4) mouseover = false;
+
+    var dist = Math.sqrt(x * x + y * y) / worldmapdata.radius;
+    if (dist >= 1) {
+
+        if (mouseover && $("#worldmap canvas").data("mousein")) {
+            $("#worldmap canvas").css("cursor", "default");
+            $("#coordinates").text("");
+            p_r("mouseout");
+        }
+        $("#worldmap canvas").data("mousein", false);
+        return false; // beyond the world map
+    }
+    dist = dasin(dist);
+
+    var heading = range(datan2(y, x) + 90, 360);
+
+    var r = 90 - dist;
+    var lat = sphsin(r, worldmapdata.latitude, heading);
+    var lon = sphcos(lat, worldmapdata.latitude, r, Math.sign(range(heading + 180, 360) - 180));
+    lon = range(lon + worldmapdata.longitude + 180, 360) - 180;
+
+    //  $("#coordinates").text(round(lat,1) + " " + round(lon,1));
+    $("#coordinates").text(round(Math.abs(lat), 1) + (lat < 0 ? 'S' : 'N') + " " + round(Math.abs(lon), 1) + (lon < 0 ? 'W' : 'E'));
+    //p_r("X: " + x + " Y: " + y + " r:" + r + " wlat:" + worldmapdata.latitude + " H:" + heading + " lat:" + lat + " lon=" + lon);
+    if (mouseover && !$("#worldmap canvas").data("mousein")) {
+        $("#worldmap canvas").css("cursor", "crosshair");
+    }
+    $("#worldmap canvas").data("mousein", true);
+
+    return {
+        latitude: lat,
+        longitude: lon
+    };
+}
+
+// can be removed later
+function loadworldmap(lat, lon) {
+    var worldmapdata = calcworldmap(lat, lon);
+    var e = {
+        worldmapdata: worldmapdata
+    };
+    return plotworldmap(e);
+}
+
+// calculate radius and create worldmapdata instance
+function calcworldmap(lat, lon) {
+    var diameter = Math.min(800, Math.min($(window).height() - 10, $(window).width() - 10)) - 2;
+    //   if (diameter < 600) diameter = 600;
+    //p_r([diameter,$(window).height(),$(window).width()]);
+    return {
+        radius: diameter / 2,
+        latitude: lat,
+        longitude: lon,
+        canvas: null
+    };
+}
+// plot worldmap
+function plotworldmap(edata, eclipsearea)
+{
+    /*
+    let jscripts = ['worldmap/d3.v3.js','worldmap/topojson.v0.min.js','worldmap/world-110m.js'];
+    for (let i in jscripts) {
+        const script = document.createElement('script');
+        script.src = jscripts[i];
+        document.head.append(script);
+    }
+*/
+    var worldmapdata = edata.worldmapdata;
+
+    //  $.getScript('worldmap/d3.v3.js', function() {alert("error1");});
+    //  $.getScript('worldmap/topojson.v0.min.js', function() {alert("error2");});
+
+    $("#worldmap").remove(); // clear it
+    $("#modal-content").append("<div id=\"worldmap\"></div>");
+
+    $("#worldmap").append("<a href=\"#\" style=\"right: 20px;\" class=\"prevnextworldmap\" onclick=\"togglepopup(); next(1, false, true);\">NEXT &gt;&gt;</a>")
+    $("#worldmap").append("<a href=\"#\" style=\"left: 20px;\" class=\"prevnextworldmap\" onclick=\"togglepopup(); next(-1, false, true);\">&lt;&lt; PREV</a>")
+    //$("#worldmap").append("<button id=\"modal-close\" onclick=\"togglepopup();\"></button>");
+    $("#worldmap").append("<span id=\"coordinates\" ></span>");
+
+    var radius = worldmapdata.radius;
+    var diameter = radius * 2;
+
+    var projection = d3.geo.orthographic()
+        .scale(radius)
+        .translate([radius, radius])
+        .clipAngle(90)
+        //    .rotate([10,0,0]);
+        .rotate([-worldmapdata.longitude, -worldmapdata.latitude, 0]);
+
+    var canvas = d3.select("#worldmap").append("canvas")
+        .attr("width", diameter)
+        .attr("height", diameter);
+    //  $("#worldmap canvas").attr("id", "eclipsemap");
+    //  console.info(d3.select("map"));
+    var path = d3.geo.path()
+        .projection(projection);
+
+    var land = topojson.object(theworld, theworld.objects.land),
+    globe = {type: "Sphere"};
+
+    context = canvas.node().getContext("2d");
+    context.strokeStyle = COLOR_COASTLINE;
+    context.fillStyle = COLOR_OCEAN;
+    context.beginPath(), path.context(context)(globe), context.fill(), context.stroke();
+    context.fillStyle = COLOR_LAND;
+    context.beginPath(), path.context(context)(land), context.fill(), context.stroke();
+    context.closePath();
+
+    edata.worldmapdata.context = context;
+    //p_r(edata)
+    if (eclipsearea) {
+        plot_central_line(edata);
+        plot_sunrise_sunset_curves(edata);
+        calc_plot_penumbra_limit(edata, 1, COLOR_PENUMBRALIMIT);
+        //!! Still under development !!!
+
+        if (debug && edata.positions) {
+            // start at 1: not at central umbra path
+            // end before curvecount, penumbra limit is already plotted
+            // show only curves in penumbral areola
+            for (let z=1; z<CURVECOUNT; z++) {
+                calc_plot_penumbra_limit(edata, z/CURVECOUNT, COLOR_MAXMAGNITUDES);
+            }
+        }
+    }
+    togglepopup(true);
+    worldmapdata.canvas = canvas;
+
+    $("#worldmap canvas").click(function(e) {
+
+        var x = e.pageX - $(this).offset().left;
+        var y = e.pageY - $(this).offset().top;
+        pos = calc_x_y_reverse(worldmapdata, x, y);
+        if (pos) {
+            if (!get_value("m")) togglepopup();
+            //p_r($("#modal-background").hasClass("active"));
+            calculate(1, eclnumber, false, pos);
+        }
+    });
+
+    $("#worldmap canvas").mousemove(function(e) {
+
+        var x = e.pageX - $(this).offset().left;
+        var y = e.pageY - $(this).offset().top;
+        calc_x_y_reverse(worldmapdata, x, y, true);
+    });
+    return worldmapdata;
+}
+
+//////// resize on init //////////////
+function initresize(elementtoscroll, width,physical)
+{
+  if (arguments.length < 3) physical = false;
+  var pixelratio = window.devicePixelRatio;
+  if (!pixelratio) pixelratio=1;
+  var contentwidth=$(window).width();
+  // physical size wanted rather than logical size ?
+  if (arguments.length < 2) {
+    if (physical)
+      width = window.screen.width;
+    else
+      width = $(window).width();
+p_r(width);
+//    contentwidth = (width)/pixelratio;
+  } else
+    contentwidth = (width);
+p_r(contentwidth);
+  contentwidth-=40; // margin;
+//p_r([window.screen.width, width, pixelratio, contentwidth]);
+
+  // put the viewport tag in the header
+  $('head').append('<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=0.5, maximum-scale=2.0, user-scalable=yes">');
+
+  // wrap a centered div around the webpage
+  $('body').wrapInner('<div id="_wrapper" style="width:'+contentwidth+'px;">');
+//  $('body').wrapInner('<div id="_wrapper" style="width:98%;">');
+  $("#_wrapper").css({"margin-left": "auto", "margin-right": "auto"});
+
+  // scroll to element
+  if (typeof(elementtoscroll)!="undefined" && elementtoscroll) {
+
+    var elem_top = $(elementtoscroll).offset()['left'];
+    var width = $(window).width();
+    $(window).resize(function() {
+      $("#_wrapper").css("width", $(window).width());
+    });
+    // Scroll to the middle of the viewport
+    var my_scroll = (width / 2) - elem_top;
+    $(window).scrollLeft(-my_scroll);
+//p_r([elem_top,width,my_scroll]);
+  }
+}
+
+function help()
+{
+    if (!g_d) return;
+    var year = new Date().getFullYear();
+    var helptext = "<div id=\"help\"><h3>Eclipse v." + g_version + "</h3>\
+ &copy; "+year+" Skysurfer\n\n\
+ Available options (URL parameters separated by ? for the first one and &amp; for the subsequent ones):\n\n\
+ -t=m,yyyy start at month m and year y rather than 'now'.\n\
+ \n\n\
+ Location is optional, can be got from GPS / location services if available and browser supports it.\n\
+ </div>";
+    popuptext(nl2br(helptext));
+}
+
+// Location data (if available)
+function getLocation()
+{
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(positionSuccess, positionError); //, {maximumAge:600000, timeout:5000});
+    } else {
+        positionError(-1);
+    }
+}
+
+// http://dev.w3.org/geo/api/spec-source.html
+function positionError(err)
+{
+    msg = "Unable to find your location";
+    alert(msg);
+}
+
+function positionSuccess(position)
+{
+    // Centre the map on the new location
+    var coords = position.coords || position.coordinate || position;
+    document.input.lat.value = round(coords.latitude,2);
+    document.input.lon.value = round(coords.longitude,2);
+    document.input.utcdiff.value = new Date().getTimezoneOffset()/-60;
+}
+$(document).ready(function() {
+
+    debug = g_d;
+    initresize("#formtable");
+
+    var y = 0,
+        m = 0;
+    // month and year from URL, e.g. t=1,2013
+    if (get_value('t')) {
+        var a = get_value('t').split(/\D/);
+        if (a.length > 1)
+            m = Math.min(a[0], a[1]);
+        y = Math.max(a[0], a[1]);
+    }
+    if (m >= 1 && m <= 12 && y > MINYEAR && y < MAXYEAR) {
+        document.input.month.value = m;
+        document.input.year.value = y;
+    } else {
+        var now = new Date();
+        document.input.month.value = now.getMonth() + 1;
+        document.input.year.value = now.getFullYear();
+    }
+    if (debug) {
+        $(".showonlywithdebug").show();
+        $("#version").css("cursor", "pointer");
+    }
+    var latlon = getcookievalue('eclipsedata');
+    p_r(latlon);
+    var a = latlon.split(";");
+    if (!isNaN(a[0]) && a[0] > -90 && a[0] < 90) {
+        document.input.lat.value = a[0];
+    }
+    if (!isNaN(a[1]) && a[1] >= -180 && a[1] <= 360) {
+        document.input.lon.value = a[1];
+    }
+    if (get_value('nocanvas')) g_canvas = false; // force disable pictures
+    if (!g_canvas) $("header b").append("<br /><i>Your browser does not support canvas so pictures are not displayed.</i>");
+    if (y > MINYEAR && y < MAXYEAR && m >= 1 && m <= 12) {
+        calculate(1);
+    }
+    $("#version").text("Version : " + g_version);
+    if (navigator.geolocation) {
+        $('#gps_here').append('<a href="#" onclick="getLocation()"><b>&nbsp;GPS</b></a>');
+    }
+
+    /* js debug */
+    $("pre#js_debug").css({
+        right: "1px",
+        width: "97%",
+        left: "1%",
+        height: "50%",
+        overflow: "auto",
+        top: "0px"
+    });
+    //requires jquery-ui $("pre#js_debug").resizable({  handles: "n, e, s, w"});
+});
+
+////////////////////////////////////////////////////////////////////////////
+</script>
+
+<title>Basic eclipse calculations</title>
+<style type="text/css">
+
+@media
+only screen and (max-width: 760px)
+  {
+
+  table.eclipseresult td{
+  display: inline;
+}
+}
+
+body {
+  background-image: url(eclipse.gif);
+  background-attachment: fixed;
+  margin: 0 20px 0 20px;
+}
+div#formresult {
+  text-align: center;
+/*  XXwidth: 100%;*/
+}
+
+header {
+  max-width: 96%;
+}
+
+table.eclipseresult td{
+  vertical-align: top;
+}
+
+canvas.resultdrawing {
+    display:none;
+}
+
+table.result, div.eclipseresult{
+  min-height: 300px;
+}
+/*
+table.result tr {
+    width: 100%;
+}
+*/
+td.eclipsedatarow {
+    font-weight: bold;
+    padding: 0;
+}
+
+div.solarresult {
+    color:blue;
+}
+
+.plotworld {
+    text-align: center;
+    font-size: 1.1em;
+    padding: 4px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+td.eclipsetitle {
+    text-align: center;
+    font-weight: bold;
+    line-height: 2em;
+}
+
+table#maintable, table#formtable, div#result, div#notes {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+div#notes {
+    background: #CCC;
+    width: 400px;
+    margin-top: 4px;
+    display: none;
+}
+
+table#maintable td {
+  vertical-align: top;
+}
+
+table#formtable input[type=number], table#formtable input[type=text] {
+  width: 60px;
+  font-size: 1em;
+  border-color: #333;
+}
+
+table#formtable input[type=button] {
+  font-size: 1em;
+}
+
+table#formtable {
+  border: solid 1px black;
+  width: 400px;
+  background-color: #CCC;
+}
+
+table.result {
+  width: 400px;
+  text-align: left;
+}
+
+#result {
+  text-align: center;
+  width: 100%;
+}
+
+tr.resultonly {
+  display:none;
+}
+
+#mycanvas, #notes {
+  border: solid 1px black;
+}
+
+canvas.resultdrawing {
+  border: solid 1px black;
+}
+
+.showonlywithdebug {
+  display:none;
+}
+
+table.eclipseresult  {
+  margin-left: auto;
+  margin-right: auto;
+
+}
+
+table.eclipseresult a {
+  color: black;
+}
+
+span.grayed_out {
+    color: gray;
+    text-decoration: line-through;
+}
+
+a.large {
+ text-transform: uppercase;
+ font-size: 1.5em;
+}
+
+a.prevnextworldmap {
+  position: absolute;
+  bottom: 20px;
+  color: white;
+  font-weight: bold;
+}
+
+span#coordinates {
+  position: absolute;
+  bottom: 40px;
+  left: 4px;
+  color: yellow;
+  font-style: italic;
+}
+
+#version {
+  XXcursor: pointer;
+}
+#help {
+  background-color: #CCC;
+  border: solid red 1px;
+  padding: 6px;
+}
+
+/*td.eclipsedatarow, */
+div.localsolar {
+  padding: 4px;
+  border: solid black 1px;
+}
+div.localsolar {
+  color: #050;
+}
+
+p.small {
+  font-size: 0.7em;
+  font-style: italic;
+}
+/* Modal popup */
+
+#modal-background {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: black;
+    opacity: .75;
+    /*
+    X-webkit-opacity: .75;
+    X-moz-opacity: .75;
+    */
+/*    filter: alpha(opacity=75); */
+    z-index: 1000;
+}
+#modal-content {
+    display: none;
+    /*background-color: black;*/
+    position: fixed;
+    z-index: 1000;
+}
+
+
+#modal-close {
+    background: url(sprite.png);
+    position: absolute;
+    border: none;
+    cursor:pointer;
+    width: 36px;
+    height: 36px;
+    top: 0px;
+    right: 0px;
+}
+
+#modal-background.active, #modal-content.active {
+    display: block;
+}
+
+#fullscreenbutton {
+    display: none; /* !! Does not work always, development only */
+    float: left;
+    font-weight: bold;
+    border: none;
+    cursor: pointer;
+    background: transparent;
+}
+
+input.numvalue {
+    width: 80px;
+}
+
+</style>
+</head>
+
+<body>
+<header>
+<b>
+This data is approximate, the times are in Universal Time and rounded to 1 minute, and the magnitudes to 1 percent.More accurate data is obtainable from the <a href="http://eclipse.gsfc.nasa.gov/eclipse.html" target="_blank">NASA site of Fred Espenak</a>.</b>
+<br/><small id="version" onclick="if (debug) help();"></small>
+</header>
+
+<div id='formresult'>
+  <form name='input'>
+  <table id='formtable'>
+    <tr>
+      <td align=center><b>Month:</b></td>
+      <td><input type="number" min="1" max="12" name="month" size=10 value="" onChange='cleanupfield(this)' /></td>
+    </tr>
+    <tr>
+      <td align=center><b>Year:</b></td>
+      <td><input type="number" name="year" size=10 value="" onChange='cleanupfield(this)' /></td>
+    </tr>
+    <!--tr>
+      <td><input type="checkbox" name="extended" /></td>
+      <td>Extended info</td>
+    </tr-->
+    <tr class="showonlywithdebug">
+      <td colspan="2"><a href="javascript:void(0);" onclick="loadworldmap(document.input.lat.value, document.input.lon.value);">Show world map</a></td>
+    </tr>
+
+
+    <tr>
+      <td align=center id="gps_here"><b>Latitude (opt):</b></td>
+      <td><input type="number" min="-90" max="90" name="lat" class="numvalue" value="" step="0.01" onChange='cleanupfield(this)' /></td>
+    </tr>
+    <tr>
+      <td align=center><b>Longitude (opt):</b></td>
+      <td><input type="number"  min="-180" max="180"  name="lon" class="numvalue" value="" step="0.01" onChange='cleanupfield(this)' /></td>
+    </tr>
+    <tr>
+      <td align=center><b>UTC + hours (opt):</b></td>
+      <td><input type="number" min="-12" max="14" name="utcdiff" class="numvalue" value="" step="0.5" onChange='cleanupfield(this)' /></td>
+    </tr>
+    <tr>
+      <td align='center'><button id="fullscreenbutton" class="showonlywithdebug" onclick="togglefullscreen();">Fullscreen</button></td><td><a href="#" class="large" onclick="javascript:calculate(1)" accesskey='#'>Calc!</a></td>
+    </tr>
+
+    <tr class="resultonly"><td><input type="button" value="Prev" accesskey="0" onclick="next(-1);"></td>
+                           <td><input type="button" value="Next" accesskey="1" onclick="next(1);"></td></tr>
+    <tr id="localfields" class="resultonly"><td><input type="button" value="Saros -" accesskey="2" onclick="next(-38);"></td>
+                           <td><input type="button" value="Saros +" accesskey="3" onclick="next(38);"></td></tr>
+    <tr class="resultonly"><td><input type="button"  class="localonly" value="Prev HERE" accesskey="8" name="qqq" onclick="next(-1,1);"></td>
+      <td><input type="button" class="localonly" value="Next HERE" accesskey="9" name="b9" onclick="next(1,1);"></td>
+    </tr>
+  </table>
+  </form>
+  <div id='notes'></div>
+  <div id="result"></div>
+</div>
+
+<div id="modal-background"></div>
+<div id="modal-content">
+<!--button id="modal-close" onclick="togglepopup();"></button-->
+</div>
+
+
+</body>
+</html>
