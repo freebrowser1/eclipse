@@ -9,6 +9,75 @@
 <script src='worldmap/d3.v3.js'></script>
 <script src='worldmap/topojson.v0.min.js'></script>
 <script src="worldmap/world-110m.js"></script>
+
+<script type="text/javascript">
+/**
+Eclipse calculation script from Jean Meeus Formulas
+Between years 1000 and 3000 AD
+*/
+if (typeof(p_r) == "undefined") {
+    var g_d = false;
+    function p_r() {}  // debug.js not available: NO debugging
+}
+const g_version = "20210505";
+// 20200503 Added GPS support
+
+var debug = false;
+// all done
+var g_done = false;
+var ___elem = document.createElement('canvas');
+var g_canvas = ___elem.getContext('2d') ? true : false;
+
+// Curve and text colors solar eclipses
+const COLOR_HORIZONCURVES    = "#00AA00";
+const COLOR_HORIZONMAXCURVES = "red";
+const COLOR_PENUMBRALIMIT    = "red";
+const COLOR_TEXT1            = "red";
+const COLOR_TEXT2            = "red";
+const COLOR_MAXMAGNITUDES    = "white";
+const FONTSIZE               = 10;
+const LETTERFONT             = "Arial";
+// World map colors
+const COLOR_OCEAN     = '#88C0FF';
+const COLOR_LAND      = '#d7c7ad';
+const COLOR_COASTLINE = '#766951';
+
+const CHECKLOCAL    = 2
+const UNDEFINED     = "undefined"
+const FLATT         = 0.99665;
+const RHO_1         = 0.9972;
+const PENUMBRAL     = 1
+const PARTIAL_SOLAR = 2
+const ANNULAR_SOLAR = 3
+const TOTAL_SOLAR   = 4
+const DAYS_CENT     = 36525;
+// extraflags bits
+const P_HYBRID      = 1;
+const P_NONCENTRAL  = 2;
+const P_ANNULAR     = 4;  // otherwise total
+///
+const OUT_OF_RANGE  = 9999999;
+var edata;
+var g_eclipsedata;
+var eclnumber;
+const RAD           = 180./Math.PI;
+
+// ploteclipse
+const D_MAGN=60;
+const CURVECOUNT = 5;  // should be a divisor of D_MAGN
+const D_MAGN2 =(D_MAGN*2+2);
+const MAXPOSITIONS =(D_MAGN2*6+45);
+const NOT_FILLED_IN = 9999;
+const MINYEAR = 1000;
+const MAXYEAR = 3000;
+const PLOT_LINE=1;
+const PLOT_CIRCLE=3;
+const PLOT_TEXT=4;
+
+const VISIBLEHERE = 2;  // return value if at least the umbral phase or middle of the eclipse is visible here
+
+</script>
+
 <style type="text/css">
 * {
 	font-family: Century Gothic, Arial, Helvetica, Comic Sans MS, Verdana;
@@ -31,7 +100,8 @@ a:hover {
 input[type="button"] {
 	border: solid 1px black;
 	margin: 2px;
-	width: 100px;
+    padding: 2px;
+	width: 6em;
 }
 
 table.result, table#form {
@@ -72,70 +142,7 @@ div#form {
 	float: left;
 }
 </style>
-
-<script type='text/javascript'>
-/**
-Eclipse calculation script from Jean Meeus Formulas
-Between years 1000 and 3000 AD
-*/
-if (typeof(p_r) == "undefined") {
-    var g_d = false;
-    function p_r() {}  // debug.js not available: NO debugging
-}
-const g_version = "20210505";
-// 20200503 Added GPS support
-
-var debug = false;
-// all done
-var g_done = false;
-var ___elem = document.createElement('canvas');
-var g_canvas = ___elem.getContext('2d') ? true : false;
-
-// Curve and text colors solar eclipses
-const COLOR_HORIZONCURVES    = "#00AA00";
-const COLOR_HORIZONMAXCURVES = "red";
-const COLOR_PENUMBRALIMIT    = "red";
-const COLOR_TEXT1            = "red";
-const COLOR_TEXT2            = "red";
-const COLOR_MAXMAGNITUDES    = "white";
-// World map colors
-const COLOR_OCEAN     = '#88C0FF';
-const COLOR_LAND      = '#d7c7ad';
-const COLOR_COASTLINE = '#766951';
-
-const CHECKLOCAL    = 2
-const UNDEFINED     = "undefined"
-const FLATT         = 0.99665;
-const RHO_1         = 0.9972;
-const PENUMBRAL     = 1
-const PARTIAL_SOLAR = 2
-const ANNULAR_SOLAR = 3
-const TOTAL_SOLAR   = 4
-const DAYS_CENT     = 36525;
-// extraflags bits
-const P_HYBRID      = 1;
-const P_NONCENTRAL  = 2;
-const P_ANNULAR     = 4;  // otherwise total
-///
-const OUT_OF_RANGE  = 9999999;
-var edata;
-var g_eclipsedata;
-const RAD           = 180./Math.PI;
-
-// ploteclipse
-const D_MAGN=60;
-const CURVECOUNT = 5;  // should be a divisor of D_MAGN
-const D_MAGN2 =(D_MAGN*2+2);
-const MAXPOSITIONS =(D_MAGN2*6+45);
-const NOT_FILLED_IN = 9999;
-const MINYEAR = 1000;
-const MAXYEAR = 3000;
-const PLOT_LINE=1;
-const PLOT_CIRCLE=3;
-const PLOT_TEXT=4;
-
-const VISIBLEHERE = 2;  // return value if at least the umbral phase or middle of the eclipse is visible here
-
+<script type="text/javascript">
 //var g_d           = null;
 
 //***** General functions ***********************************
@@ -631,9 +638,7 @@ function eclipse_maindata(ecl_number, first, lunar)
 {
     var a,k,h,hh,dt,s,c;
     var ish, n;
-
     var two_eclipses = false;
-
 /* ----------------------------------------------calculate lunation number */
     a = 5.86883*ecl_number-0.69+50000.;
 /* ------------------------------------------------------time out of range */
@@ -653,24 +658,17 @@ function eclipse_maindata(ecl_number, first, lunar)
     */
 
     if (!first) k = k-ish;
-
     if (lunar) k = k-0.5;
-    //alert(a + " " + k);
+    //p_r(a + " " + k);
     k -= 50000;
-
     var T = k/1236.853;
-
     var e = 1.-T*(0.0024954+(7522e-9)*T);
-
     var a = phase(Math.round(k*4));
-
     var jd = a[0];
-    //alert(jd); return true;
-
+  p_r([first,jd]);
     var m  = a[1];
     var m1 = a[2];
     var f  = a[3];
-
     s = 51959.5;
     c = 0.;
     omega = angler(259.18e0,-1934.182008e0,2078.e-6,22.e-7,T);
@@ -687,7 +685,7 @@ function eclipse_maindata(ecl_number, first, lunar)
     c += sumsin(e,  -73.,m+m1);
     c += sumsin(e,  -67.,m-m1);
     c += sumsin(1,  117.,2*f);
-    gamma = s*dsin(f)+c*dcos(f)-(dcos(f) < 0 ? -1 : 1)*25.*dsin(omega);
+    let gamma = s*dsin(f)+c*dcos(f)-(dcos(f) < 0 ? -1 : 1)*25.*dsin(omega);
     gamma = gamma/1e4;
     l2 = -59.;
     l2 += sumcos(e,-46.,m);
@@ -696,7 +694,7 @@ function eclipse_maindata(ecl_number, first, lunar)
     l2 += sumcos(e,  5.,m+m1);
     l2 = l2/1e4;
     l1 = 0.5460-l2;
-    speed = 13.1+0.96*dcos(m1);
+    let speed = 13.1+0.96*dcos(m1);
     dt = ((dcos(f) < 0 ? -1 : 1)*980.5*gamma)/(1e4*speed);
     jd = jd - dt;
     T = jd / 36525;
@@ -711,6 +709,7 @@ function eclipse_maindata(ecl_number, first, lunar)
     }
     return false;
 }
+
 function eclipse_auxdata(edata) // auxiliary eclipse data
 {
     for (var i = 0; i < 7; i++) edata.tle[i] = "";
@@ -744,12 +743,13 @@ function eclipse_auxdata(edata) // auxiliary eclipse data
 
     // ----------------------------------------------------------lunar eclipse
     if (edata.lunar) {
-        edata.magn = (1.0129 + l2 - Math.abs(gamma)) / 0.545;
+        edata.magn = (1.0129 + l2 - Math.abs(edata.gamma)) / 0.545;
         // ---------------------------------------check if it is an umbral eclipse
 
         if (edata.magn < 0.) {
             edata.flags = PENUMBRAL;
-            edata.magn = (1.5572 - l2 - Math.abs(gamma)) / 0.545;
+            edata.magn = (1.5572 - l2 - Math.abs(edata.gamma)) / 0.545;
+p_r([edata.magn, l2, edata.gamma]);
         }
 
         var pp = 1.5572 - l2;
@@ -759,10 +759,10 @@ function eclipse_auxdata(edata) // auxiliary eclipse data
             edata.title = "Penumbral";
             lunar_contact_times(edata, pp, 2, 4, "penumbral");
         } else {
-            up = 1.0129 + l2;
+            var up = 1.0129 + l2;
             // total lunar eclipse
             if (edata.magn > 1) {
-                tp = 0.4679 + l2;
+                var tp = 0.4679 + l2;
                 edata.title = "Total";
                 lunar_contact_times(edata, tp, 2, 4, "totality");
                 lunar_contact_times(edata, up, 1, 5, "umbral");
@@ -783,7 +783,6 @@ function eclipse_auxdata(edata) // auxiliary eclipse data
         }
     } else {
         // ----------------------------------------------------------solar eclipse
-
         edata.magn = (1.5432 - l2 - Math.abs(edata.gamma)) / (0.546 - 2 * l2);
         edata.tan_f2 = 0.004664 + 0.000078 * dcos(edata.M);
         var gam1 = edata.gamma / RHO_1;
@@ -844,7 +843,7 @@ function eclipse_auxdata(edata) // auxiliary eclipse data
             phi = dasin(dcos(d1) * dcos(psi));
             if (edata.gamma < 0) phi = -phi;
             var ha = dacos(-dtan(phi) * dtan(d1));
-            s = sign(gamma) * sign(psi);
+            s = sign(edata.gamma) * sign(psi);
             lambda = range(edata.mu + s * ha + diff * 360);
             /* greatest phase at partial eclipses */
             var xy = calc_greatest_phase(edata);
@@ -1090,7 +1089,10 @@ function plot_marker(ctx, x, y, text, color, option)
 
     var textwidth = ctx.measureText(text).width;
     if (textwidth / factor + xtext > ctx.canvas.width) xtext = ctx.canvas.width - textwidth / factor;
-    ctx.font = "10pt Arial";
+    //if (!ctx.font = option.font) {
+    if (!(ctx.font = option.font)) {
+        ctx.font = FONTSIZE + "pt " + LETTERFONT;
+    }
     ctx.textAlign = option["align"];
     ctx.fillStyle = color;
     if (option.marker) {
@@ -1145,10 +1147,14 @@ function plot_central_line(edata)
     var xysubsolar = calc_x_y(edata.worldmapdata, edata.delta, edata.mu, "Sub Solar");
     plot_marker(ctx, xysubsolar.x, xysubsolar.y, xysubsolar.descr, textcolor);
     var text = edata.title + " eclipse of " + edate(edata.jd, 1900, -1);
-    plot_marker(ctx, 10, 10, text, COLOR_MAXMAGNITUDES, {
+    $("#worldmap").append(`<span class="sedata_canvas canvastext">${text}</span>`)
+/*
+    plot_marker(ctx, 10, 20, text, COLOR_MAXMAGNITUDES, {
         align: "left",
+        font: Math.floor(FONTSIZE*1.5) + "px " + LETTERFONT,
         marker: false
     });
+    */
 }
 
 function plot_eclipse_area(edata)
@@ -1209,7 +1215,7 @@ function plot_location(ctx, pos, flag, options)
         ctx.beginPath();
         switch (flag) {
             case PLOT_TEXT:
-                ctx.font = options.font ? options.font : "10pt Arial";
+                ctx.font = options.font ? options.font : FONTSIZE + "pt " + LETTERFONT;
                 ctx.textAlign = "center";
                 ctx.fillStyle = options.color;
                 ctx.fillText(options, xy.x, xy.y + 10);
@@ -1328,17 +1334,16 @@ function calc_plot_penumbra_limit(edata, dist, color)
         }
  //if (dist != 1) p_r(lastpoint);
         //p_r({x: edata.corner_points[i][1].x, y: edata.corner_points[i][1].y});
-        /* // does nothing useful
+        // does nothing useful
         if (dist == 1) {
             plot_location(edata.worldmapdata.context, {
                 x: edata.corner_points[i][1].x,
                 y: edata.corner_points[i][1].y
             }, PLOT_LINE, {
                 lastpoint: lastpoint,
-                color: "purple"// thecolor
+                color: COLOR_PENUMBRALIMIT
             }); // finish the curve
         }
-        */
         //p_r(edata.corner_points,3);
     }
     return 0;
@@ -1409,7 +1414,7 @@ function lunar_contact_times(edata, d, t1, t2, text)
     h = d * d - edata.gamma * edata.gamma;
 //    p_r(edata);
     if (h < 0) return false;
-    h = Math.sqrt(h) / speed;
+    h = Math.sqrt(h) / edata.speed;
 //    p_r([d,t1,t2,h]);
 
     // save extra data for drawing a picture
@@ -1681,15 +1686,28 @@ function calculate(rewrite, number, doplot, pos)
     var visible_here = false;
     // lunar and solar eclipses
     for (lunar = 0; lunar < 2; lunar++) {
+
         // allow 2 eclipses with one lunation interval
+        let edatapair = [];
         for (var j = 0; j < 2; j++) {
-            edata = eclipse_maindata(number, j, lunar);
+            edatapair[j] = eclipse_maindata(number, j, lunar);
+        }
+        // always correct time order
+        if (edatapair[1].jd < edatapair[0].jd) {
+            p_r(edatapair[1]);
+            let temp = edatapair[1];
+            edatapair[1] = edatapair[0];
+            edatapair[0] = temp;
+            p_r(edatapair[0]);
+        }
+        for (var j = 0; j < 2; j++) {
+            edata = edatapair[j];
+            //edata = eclipse_maindata(number, j, lunar);
+            p_r([edata.jd, edata.lunar]);
             if (edata) {
                 edata = eclipse_auxdata(edata);
                 ee[i++] = edata;
-                // check whether visible locally
-
-                //p_r("here=" + visible_here + " lunar=" + lunar + " " + pos.latitude + " " + pos.longitude);
+                // check whether solar eclipse visible locally
                 if (!visible_here && !lunar && pos.latitude !== '' && pos.longitude !== '') {
 
                     if (edata = calc_local_phases(edata, pos.latitude, pos.longitude)) { // calculate local beginning, middle and end
@@ -1924,7 +1942,6 @@ function getfield(field, defvalue='')
 {
     var value = parsefield(field.value);
     if (isNaN(value) || value < $(field).attr("min") || value > $(field).attr("max")) {
-p_r(value);
         if (defvalue !== '') {
             $(field).css({"border-color": "red"});
         }
@@ -1948,7 +1965,7 @@ function getlatlon()
     else
         $(".localonly").removeAttr("disabled");
 //p_r([latitude,longitude])
-    setcookievalue('eclipsedata', latitude + ';' + longitude);
+    setcookievalue('eclipsedata', latitude + ';' + longitude + ':' + utcdiff);
     return {latitude: latitude, longitude: longitude, utcdiff: utcdiff }
 }
 
@@ -2499,8 +2516,8 @@ function plotworldmap(edata, eclipsearea)
     $("#worldmap").remove(); // clear it
     $("#modal-content").append("<div id=\"worldmap\"></div>");
 
-    $("#worldmap").append("<a href=\"#\" style=\"right: 20px;\" class=\"prevnextworldmap\" onclick=\"togglepopup(); next(1, false, true);\">NEXT &gt;&gt;</a>")
-    $("#worldmap").append("<a href=\"#\" style=\"left: 20px;\" class=\"prevnextworldmap\" onclick=\"togglepopup(); next(-1, false, true);\">&lt;&lt; PREV</a>")
+    $("#worldmap").append("<a href=\"#\" style=\"right: 20px;\" class=\"prevnext_canvas canvastext\" onclick=\"togglepopup(); next(1, false, true);\">NEXT &gt;&gt;</a>")
+    $("#worldmap").append("<a href=\"#\" style=\"left: 20px;\" class=\"prevnext_canvas canvastext\" onclick=\"togglepopup(); next(-1, false, true);\">&lt;&lt; PREV</a>")
     //$("#worldmap").append("<button id=\"modal-close\" onclick=\"togglepopup();\"></button>");
     $("#worldmap").append("<span id=\"coordinates\" ></span>");
 
@@ -2692,6 +2709,9 @@ $(document).ready(function() {
     if (!isNaN(a[1]) && a[1] >= -180 && a[1] <= 360) {
         document.input.lon.value = a[1];
     }
+    if (!isNaN(a[2]) && a[2] >= -12 && a[1] <= 14) {
+        document.input.lon.value = a[1];
+    }
     if (get_value('nocanvas')) g_canvas = false; // force disable pictures
     if (!g_canvas) $("header b").append("<br /><i>Your browser does not support canvas so pictures are not displayed.</i>");
     if (y > MINYEAR && y < MAXYEAR && m >= 1 && m <= 12) {
@@ -2764,8 +2784,8 @@ td.eclipsedatarow {
     padding: 0;
 }
 
-div.solarresult {
-    color:blue;
+span.local_magn, div.solarresult {
+    color:#0099FF;
 }
 
 .plotworld {
@@ -2860,9 +2880,17 @@ a.large {
  font-size: 1.5em;
 }
 
-a.prevnextworldmap {
-  position: absolute;
+a.prevnext_canvas {
   bottom: 20px;
+}
+
+span.sedata_canvas {
+  top: 10px;
+  left: 10px;
+}
+
+.canvastext {
+  position: fixed;
   color: white;
   font-weight: bold;
 }
@@ -2896,7 +2924,6 @@ span.local_magn {
     font-weight: bold;
     font-style: italic;
     font-size: 1.3em;
-    color:yellow;
 }
 p.small {
   font-size: 0.7em;
@@ -2967,7 +2994,7 @@ This data is approximate, the times are in Universal Time and rounded to 1 minut
 </header>
 
 <div id='formresult'>
-  <form name='input'>
+  <form name='input' method='post'>
   <table id='formtable'>
     <tr>
       <td align=center><b>Month:</b></td>
