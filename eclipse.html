@@ -19,7 +19,7 @@ if (typeof(p_r) == "undefined") {
     var g_d = false;
     function p_r() {}  // debug.js not available: NO debugging
 }
-const g_version = "20210505";
+const g_version = "20210611";
 // 20200503 Added GPS support
 
 var debug = false;
@@ -1965,7 +1965,7 @@ function getlatlon()
     else
         $(".localonly").removeAttr("disabled");
 //p_r([latitude,longitude])
-    setcookievalue('eclipsedata', latitude + ';' + longitude + ':' + utcdiff);
+    setcookievalue('eclipsedata', latitude + ';' + longitude + ';' + utcdiff);
     return {latitude: latitude, longitude: longitude, utcdiff: utcdiff }
 }
 
@@ -2679,6 +2679,13 @@ $(document).ready(function() {
     debug = g_d;
     initresize("#formtable");
 
+    document.getElementById("version").ondblclick = function() {
+        if (!g_d) {
+            debug = g_d = true;
+            console.log("debug!");
+            _jsdebug_callback();
+        }
+    };
     var y = 0,
         m = 0;
     // month and year from URL, e.g. t=1,2013
@@ -2709,8 +2716,8 @@ $(document).ready(function() {
     if (!isNaN(a[1]) && a[1] >= -180 && a[1] <= 360) {
         document.input.lon.value = a[1];
     }
-    if (!isNaN(a[2]) && a[2] >= -12 && a[1] <= 14) {
-        document.input.lon.value = a[1];
+    if (!isNaN(a[2]) && a[2] >= -12 && a[2] <= 14) {
+        document.input.utcdiff.value = a[2];
     }
     if (get_value('nocanvas')) g_canvas = false; // force disable pictures
     if (!g_canvas) $("header b").append("<br /><i>Your browser does not support canvas so pictures are not displayed.</i>");
