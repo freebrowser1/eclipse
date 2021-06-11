@@ -4,11 +4,10 @@
   When appending 'd=1' after the URL, a debug button will appear on the website and when clicked on it, debug output is shown as overlay over the webpage. Click again or double click on the debug output to hide it.
 */
 
+var g_d = location.href.match(/\bd\=[1-9]/); // || localStorage.getItem("_jsdebug");
 
-var g_d = location.href.match(/\bd\=[1-9]/);
-
-var _jsdebug_callback = function() {
-    var consolelog = console.log;
+var _jsdebug_callback = function(later) {
+    var consolelog = console.info;  // avoid console.log because of cyclic recursion of console.log !!
     var consoletrace = console.trace;
     var origconsole = console;
 
@@ -18,6 +17,7 @@ var _jsdebug_callback = function() {
             var jso=JSON.stringify(o, function(k,v){
                 if (typeof v =='object') {
                     if ( !seen.indexOf(v) ) { return '__cycle__'; }
+//console.info(v)
                     seen.push(v);
                 } return v;
             });
@@ -43,7 +43,7 @@ var _jsdebug_callback = function() {
             file = stacktrace.substr(h);
         }
         if (navigator.userAgent.indexOf("Safari") != -1)  { // Webkit
-            let f;
+            let f = false;
             if (navigator.userAgent.indexOf("Chrome") > 0) { // Chrome / Brave / etc.
                 f = file.substr(3).match(/^(.+?)\s+(\S+)\?.+?:(\d+)/);
             } else {  // Apple Safari
@@ -79,7 +79,8 @@ var _jsdebug_callback = function() {
         if (typeof(raw) == 'undefined' || !raw) {
             return jsonify(output) + "\n";
         } else {
-            return output;
+            return jsonify(output) + "\n";
+//            return output;
         }
     }
 
@@ -90,7 +91,6 @@ var _jsdebug_callback = function() {
 //        p.innerText = JSON.stringify(args);
 //        // call the original console.log function
         console._log(1, arguments);
-       // consolelog.apply(console,arguments)
     }
 
     console.trace = function(title, level)
@@ -111,7 +111,7 @@ var _jsdebug_callback = function() {
             if (arguments.length < 1) {
                 title = "";
             }
-            g_d.innerHTML += (`\n** START TRACE ${title}**` + __makehtml(str,1) + "\n** END TRACE **\n\n");
+            g_d.innerHTML += (`\n** START TRACE ${title}**` + __makehtml(str) + "\n** END TRACE **\n\n");
         }
     }
 
@@ -120,13 +120,14 @@ var _jsdebug_callback = function() {
         stacktrace = getStackTrace()[level+1];
         let out = __translatestack(stacktrace);
         let output = params;
+//console.info(params);
         if (params.length == 1) {
             output = params[0];
         }
 
         consolelog(out,output);
         if (g_d) {
-            g_d.innerHTML += out + __makehtml(output) + "\n";
+            g_d.innerHTML += out + __makehtml(output,1) + "\n";
         }
     }
 
@@ -136,7 +137,6 @@ var _jsdebug_callback = function() {
         }
 
     }
-
     if (g_d) {
         var h = document.getElementsByTagName('head').item(0);
         var s = document.createElement("style");
@@ -154,7 +154,7 @@ var _jsdebug_callback = function() {
         _toggleelement = function (elementid)
         {
             var u = document.getElementById(elementid);
-            //console.log(u.style.display);
+            //console.info(u.style.display);
             if (u.style.display != 'none') {
                 u.style.display = 'none';
             } else {
@@ -162,14 +162,24 @@ var _jsdebug_callback = function() {
             }
         }
         var body = document.getElementsByTagName('body');
-
-        window.addEventListener('load', (event) => {
-            ///console.log('page is fully loaded');
-            document.getElementsByTagName('body')[0].insertAdjacentHTML("afterbegin",
-            "<div class=\"js_debug\" id=\"js_debugclick\" onclick=\"_toggleelement('js_debug')\">JS DEBUG</div>\
-    <pre id='js_debug'  style=\"display:none;\" ondblclick=\"_toggleelement('js_debug');\"></pre>\n");
-            g_d = document.getElementById('js_debug');
-        });
+        _adddebug = function()
+        {
+            if (!document.getElementById('js_debug')) {
+                //console.info(document.getElementsByTagName('body')[0]);
+                document.getElementsByTagName('body')[0].insertAdjacentHTML("afterbegin",
+                "<div class=\"js_debug\" id=\"js_debugclick\" onclick=\"_toggleelement('js_debug')\">JS DEBUG</div>\
+        <pre id='js_debug'  style=\"display:none;\" ondblclick=\"_toggleelement('js_debug');\"></pre>\n");
+                g_d = document.getElementById('js_debug');
+            }
+        }
+        if (typeof(later) != "undefined") {
+            window.addEventListener('load', (event) => {
+                _adddebug();
+                ///console.info('page is fully loaded');
+            });
+        } else {
+            _adddebug();
+        }
     }
 
 };
